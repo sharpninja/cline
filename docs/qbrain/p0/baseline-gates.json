@@ -1,0 +1,202 @@
+[
+  {
+    "planLine": 460,
+    "entry": "- Dependency installation: bun install --frozen-lockfile --ignore-scripts; enumerate required lifecycle/pre/post actions from pinned packages and run only reviewed direct Bun/Node/PowerShell equivalents. Missing necessary native setup blocks its gate until a compliant setup path is recorded; never silently omit required installation work.",
+    "status": "replay-with-blocked-lifecycle",
+    "receipts": [
+      "install-replay.json"
+    ],
+    "reason": "14 lifecycle entries await reviewed concrete setup; historical install flags unknown",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 461,
+    "entry": "- `bun run build:sdk`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-build.jsonl"
+    ],
+    "reason": "13 direct SDK steps; original wrappers audited separately",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 462,
+    "entry": "- `bun -F @cline/cli build`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-cli-build.command.json"
+    ],
+    "reason": "Direct Bun builder",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 463,
+    "entry": "- `bun run types`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-host-typechecks.jsonl",
+      "../baseline-sdk-typechecks.jsonl"
+    ],
+    "reason": "Direct compiler checks, root wrapper not claimed",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 464,
+    "entry": "- `bun run lint`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-root-lint.command.json"
+    ],
+    "reason": "Non-writing direct Biome invocation",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 465,
+    "entry": "- Run Bun package scripts directly from PowerShell, checking each exit code: agents test; llms test; core test:unit; CLI test:unit; cline-hub test; example @cline/vscode test; shared test:unit; ui test; and, from P1, qbrain-governance test. Use bun -F <package> <script>. Do not invoke root test:unit because its current implementation launches Bash.",
+    "status": "executed-and-blocked-subsets",
+    "receipts": [
+      "../baseline-evidence-index.json"
+    ],
+    "reason": "Each named package retained; core excluded fixtures and credential/platform cases block P1; governance absent B0",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 466,
+    "entry": "- `bun -F @cline/core test:e2e`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-core-e2e.command.json"
+    ],
+    "reason": "Recorded outcome, not phase acceptance",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 467,
+    "entry": "- `bun -F @cline/cli test:e2e`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-cli-e2e.command.json"
+    ],
+    "reason": "Failures retained for P1",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 468,
+    "entry": "- `bun -F @cline/cli test:e2e:interactive`",
+    "status": "blocked",
+    "receipts": [
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "CLI test:e2e:interactive P1 compliant PTY orchestration",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 469,
+    "entry": "- `bun -F @cline/ui test:package`",
+    "status": "blocked",
+    "receipts": [
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "UI test:package P1 Bun-based consumer installation",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 470,
+    "entry": "- `bun -F @cline/cline-hub build:webview`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-hub-webview.command.json"
+    ],
+    "reason": "tsc and Vite exits separately recorded",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 471,
+    "entry": "- `bun -F @cline/cline-hub smoke:options`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-hub-options.command.json"
+    ],
+    "reason": "Full options smoke",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 472,
+    "entry": "- `bun -F @cline/cli test:e2e:cli:tui`",
+    "status": "blocked",
+    "receipts": [
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "CLI test:e2e:cli:tui P1 PowerShell config and fixtures",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 473,
+    "entry": "- `bun -F @cline/cli test:e2e:tuistory`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-cli-tuistory.command.json"
+    ],
+    "reason": "Existing full tuistory suite",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 474,
+    "entry": "- `bun -F @cline/code typecheck`, `test:sidecar`, `test:sidecar-startup`, `test:settings-ui`, `test:desktop-client`, `test:chat-ui`, `test:dmg-background`, `test:windows-installer`",
+    "status": "executed-with-skips",
+    "receipts": [
+      "../baseline-host-typechecks.jsonl",
+      "../baseline-desktop-commands.jsonl",
+      "../baseline-desktop-bun-commands.jsonl"
+    ],
+    "reason": "All seven desktop scripts recorded; Windows x64 cases remain prerequisite; reruns preserve original failures",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 475,
+    "entry": "- in apps/vscode, from PowerShell: run the non-writing type checks and lint procedure defined above (B0 direct commands, P1 refactored scripts), then bun run format, bun run test:vitest, bun run test:unit, bun run test:bun and bun run test:e2e; if an X display exists, set $env:DISPLAY to its value (for example ':1') and run bun run test:integration; otherwise use the PowerShell-managed Xvfb procedure, then run test:integration.",
+    "status": "executed-and-blocked-subsets",
+    "receipts": [
+      "../baseline-vscode-typechecks.jsonl",
+      "../baseline-proto-checks.json",
+      "../baseline-vscode-lint.stdout.txt",
+      "../baseline-vscode-format.command.json",
+      "../baseline-vscode-vitest.command.json",
+      "../baseline-vscode-bun-unit.command.json",
+      "../baseline-vscode-bun-adapter.command.json",
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "Direct type/lint/proto/format/unit runners; integration/e2e preparation blocked with named P1 replacements",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 476,
+    "entry": "- in webview-ui: `bun run test`",
+    "status": "executed",
+    "receipts": [
+      "../baseline-vscode-webview.command.json"
+    ],
+    "reason": "Full webview suite",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 477,
+    "entry": "- Node consumer smoke: preserve the existing tarball packing and actual node-process import/runtime assertions, but in P1 replace ci-node-smoke.ts's npm install/cache setup with Bun install and a temporary Bun cache. Do not invoke the npm-backed baseline script. Record its P0 baseline as blocked by the toolchain contract and run the corrected smoke before HV-P1; this preserves Node runtime coverage rather than dropping it.",
+    "status": "blocked",
+    "receipts": [
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "Node consumer smoke npm wrapper blocked; P1 must preserve actual Node runtime assertions with Bun installation",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  },
+  {
+    "planLine": 478,
+    "entry": "- bun sdk/scripts/check-publish.ts (private product governance has internal: true; preserve public SDK compatibility).",
+    "status": "blocked",
+    "receipts": [
+      "../baseline-command-blockers.json"
+    ],
+    "reason": "check-publish lifecycle chain requires audited P1 Bun configuration",
+    "phaseDisposition": "All failures, missing executions and required skipped cases remain P1 blockers; no waiver."
+  }
+]
