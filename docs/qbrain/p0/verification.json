@@ -1,0 +1,95 @@
+{
+  "todoId": "QB-AGENT-001",
+  "phase": "P0",
+  "scope": "Preparation accepted; product implementation remains incomplete",
+  "baseline": "fa840c741c3fc2eb49e7e0a4484895a99dae5cc5",
+  "approvedPlanSha256": "95AC9C5A071920BB25F60E3AE06E451B0E3375B07801EE648136882EF0BA6290",
+  "review": {
+    "effort": "max",
+    "endedAtUtc": "2026-10-10T23:19:17.9135664Z",
+    "verdict": "AGREE",
+    "model": "claude-opus-5-5",
+    "round": 10,
+    "actualP0Defects": 0,
+    "accuracy": 99,
+    "reviewer": "Claude Code",
+    "completeness": 99
+  },
+  "validation": {
+    "status": "PASS",
+    "positiveChecks": 7215,
+    "mutationChecks": 44,
+    "completedAtUtc": "2026-10-10T22:55:35.5405115Z"
+  },
+  "audit": {
+    "reviewsVerified": 10,
+    "historicalVerificationSha256": "14BBD945E1F72E3383C1F403A40CB1F0C72AF1C027509E2C9154A6BCA0E409DB",
+    "laterAuditSessionId": "ClaudeCode-20261011T001455Z-hv8-hv10-audit-recovery",
+    "laterVerificationSha256": "C954F9D43EE2FFCF0837D772084CAF492184BFB7E7D65B2E782BA17D50764BD9"
+  },
+  "canonical": {
+    "unchangedOtherTasks": 6,
+    "productDone": false,
+    "verifiedAtUtc": "2026-10-11T00:30:54.8963951Z",
+    "p0Done": true
+  },
+  "nextGates": [
+    "Merge P0 phase PR before starting next phase",
+    "Complete P1-P5 acceptance-criteria gap analysis before product coding",
+    "Every phase closes with tests and required HV before its PR"
+  ],
+  "evidence": [
+    {
+      "path": "docs/receipts/p0/remediation-r10/p0-criteria.json",
+      "sha256": "4F3C4CE4ABF64A9CE063DC4E03FA4C134F54BE21FFD7B1D5B25F280A0CE0079D"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/obligation-ledger.json",
+      "sha256": "B8FD3332D5C3404D72E585A979AB9522D2CE8C78B9506B85784FDA1A97E09DD3"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/gate-matrix-coverage.json",
+      "sha256": "78D454FB2EFC410E01BE6EEADD4C708AA91B345DD2A46F719F16EDFC406ED150"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/self-check.json",
+      "sha256": "9F700FB8DA3619C0BAC1AA5FB05AB74B4130619806C832DFC3A22E1B82E54E2C"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/negative-acceptance-checks.json",
+      "sha256": "3501864B7CFEB5A82D9255339BC862F6F95FD543831A29A2369108944D650780"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/root-discovery-summary.json",
+      "sha256": "F6C6BDF63A64DE52869BCFB09986D66EDF6E8D3738F282C9426FE5B3ADF46D78"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/namespace-verification.json",
+      "sha256": "7517C6F663138419D8A65D837F6095ABC255DD7A13273FF9BE0DBCE275FD81F0"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/usecase-verification.json",
+      "sha256": "266D089BC953EB8B5A6EC30D93970B450A51B7B70BD0800B6969B0ADBAA40364"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/record-content-verification.json",
+      "sha256": "0E99C6015A9034CE2F6D1AED0D12C18AA1CF80AD165C6AD8041429812D770AAA"
+    },
+    {
+      "path": "docs/receipts/p0/remediation-r10/read-interface-inventory.json",
+      "sha256": "FDF0E6D34204D61F98ACB09122DF92E21C3FC99004AA12FC266050608E634948"
+    },
+    {
+      "sha256": "BF01D469E8C7A41133480994EA9311073DE47D8B835A04500ECEC473BB50B855",
+      "path": "docs/receipts/p0/hv10-closure/external-input-verification.json"
+    },
+    {
+      "sha256": "403AF756772BD94693D53D2D95D2C1FE7D635055979DAE92098AE927A3DB72C9",
+      "path": "docs/receipts/p0/hv10-closure/canonical-completion/verification.json"
+    },
+    {
+      "sha256": "4C6FA97E3162105DDDBC392F3A05B7F94695C41E62CE075194FA7DFC3222EF32",
+      "path": "docs/receipts/hv/20261010T225840Z-p0-r10/verdict.json"
+    }
+  ]
+}
