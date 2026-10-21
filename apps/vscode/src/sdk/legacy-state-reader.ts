@@ -4,11 +4,12 @@
 // data directory, so the SDK adapter can surface tasks and settings created
 // before the SDK migration.
 //
-// All reads are non-throwing — missing or corrupt files return defaults.
+// Missing or corrupt files return defaults; host storage policy refusals throw.
 
 import fs from "node:fs"
 import path from "node:path"
 import { Anthropic } from "@anthropic-ai/sdk"
+import { validateStoragePath } from "@cline/shared/storage"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { HistoryItem } from "@shared/HistoryItem"
 import { Logger } from "@shared/services/Logger"
@@ -26,7 +27,7 @@ import { resolveDataDirFromEnv } from "@shared/storage/storage-context"
 export function resolveDataDir(override?: string): string {
 	// Delegates to the same resolver createStorageContext uses so the two
 	// stores can never drift apart again (ENG-2332).
-	return override || resolveDataDirFromEnv()
+	return validateStoragePath(override || resolveDataDirFromEnv())
 }
 
 /** Path to globalState.json */
@@ -51,7 +52,7 @@ function mcpSettingsPath(dataDir?: string): string {
 
 /** Path to a task directory */
 export function taskDirPath(taskId: string, dataDir?: string): string {
-	return path.join(resolveDataDir(dataDir), "tasks", taskId)
+	return validateStoragePath(path.join(resolveDataDir(dataDir), "tasks", taskId))
 }
 
 /** Path to api_conversation_history.json for a task */
@@ -80,9 +81,10 @@ function taskMetadataPath(taskId: string, dataDir?: string): string {
 
 /**
  * Read and parse a JSON file, returning undefined on any error.
- * Never throws — returns fallback instead.
+ * Missing/corrupt files return fallback; policy refusals remain observable.
  */
 function readJsonFile<T>(filePath: string, fallback: T): T {
+	filePath = validateStoragePath(filePath)
 	try {
 		if (!fs.existsSync(filePath)) {
 			return fallback
@@ -158,7 +160,9 @@ export function readTaskHistory(dataDir?: string): HistoryItem[] {
  * Returns true when the task existed in legacy history.
  */
 export function deleteLegacyTask(taskId: string, dataDir?: string): boolean {
-	const historyPath = taskHistoryPath(dataDir)
+	// Validate both mutation targets before changing either one.
+	const historyPath = validateStoragePath(taskHistoryPath(dataDir))
+	const taskPath = taskDirPath(taskId, dataDir)
 	const history = readTaskHistory(dataDir)
 	const filteredHistory = history.filter((item) => item.id !== taskId)
 	const existed = filteredHistory.length !== history.length
@@ -168,7 +172,7 @@ export function deleteLegacyTask(taskId: string, dataDir?: string): boolean {
 			fs.mkdirSync(path.dirname(historyPath), { recursive: true })
 			fs.writeFileSync(historyPath, JSON.stringify(filteredHistory, null, 2), "utf-8")
 		}
-		fs.rmSync(taskDirPath(taskId, dataDir), { recursive: true, force: true })
+		fs.rmSync(taskPath, { recursive: true, force: true })
 	} catch (error) {
 		Logger.warn(`[LegacyStateReader] Failed to delete legacy task ${taskId}:`, error)
 	}
@@ -266,7 +270,7 @@ export function readMcpSettings(dataDir?: string): McpSettingsFile {
  * Returns an empty array if the tasks directory doesn't exist.
  */
 export function listTaskIds(dataDir?: string): string[] {
-	const tasksDir = path.join(resolveDataDir(dataDir), "tasks")
+	const tasksDir = validateStoragePath(path.join(resolveDataDir(dataDir), "tasks"))
 	try {
 		if (!fs.existsSync(tasksDir)) {
 			return []

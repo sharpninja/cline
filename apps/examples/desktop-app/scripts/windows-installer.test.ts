@@ -136,7 +136,7 @@ Unicode true
 RequestExecutionLevel user
 !include FileFunc.nsh
 !include "${nsisString(hook)}"
-!define MAINBINARYNAME "cline-app"
+!define MAINBINARYNAME "cline-qb-app"
 Name "Cline cleanup test"
 OutFile "${nsisString(installer)}"
 Page instfiles
@@ -158,7 +158,7 @@ Section
     Quit
   CreateDirectory "$INSTDIR"
   ClearErrors
-  FileOpen $0 "$INSTDIR\\code-sidecar.exe" w
+  FileOpen $0 "$INSTDIR\\cline-qb-sidecar.exe" w
   IfErrors 0 +3
     SetErrorLevel 4
     Quit
@@ -170,8 +170,8 @@ SectionEnd
 Section "Uninstall"
   !insertmacro NSIS_HOOK_PREUNINSTALL
   ClearErrors
-  Delete "$INSTDIR\\code-sidecar.exe"
-  Delete "$INSTDIR\\cline-app.exe"
+  Delete "$INSTDIR\\cline-qb-sidecar.exe"
+  Delete "$INSTDIR\\cline-qb-app.exe"
   IfErrors 0 +2
     SetErrorLevel 5
 SectionEnd
@@ -201,28 +201,28 @@ SectionEnd
 		const dir = path.join(root, "fresh install");
 		expect(await run(installer, ["/S", `/D=${dir}`])).toBe(0);
 		expect(await run(installer, ["/S", `/D=${dir}`])).toBe(0);
-		expect(readFileSync(path.join(dir, "code-sidecar.exe"), "utf8")).toBe(
+		expect(readFileSync(path.join(dir, "cline-qb-sidecar.exe"), "utf8")).toBe(
 			"replaced",
 		);
 	}, 120_000);
 
 	test("stops all target x64 processes, releases the file, and preserves another install", async () => {
 		const dir = path.join(root, "Cline 'quoted' $ space (测试)");
-		const beta = await start(`${dir} Beta`, "code-sidecar.exe");
+		const beta = await start(`${dir} Beta`, "cline-qb-sidecar.exe");
 		const targets = [
-			await start(dir, "cline-app.exe"),
-			await start(dir, "code-sidecar.exe"),
-			await start(dir, "code-sidecar.exe"),
+			await start(dir, "cline-qb-app.exe"),
+			await start(dir, "cline-qb-sidecar.exe"),
+			await start(dir, "cline-qb-sidecar.exe"),
 		];
 		// Windows must actually have the executable locked before the test.
 		expect(() =>
-			writeFileSync(path.join(dir, "code-sidecar.exe"), "locked"),
+			writeFileSync(path.join(dir, "cline-qb-sidecar.exe"), "locked"),
 		).toThrow();
 		expect(await run(installer, ["/S", `/D=${dir}`])).toBe(0);
 		await waitFor(() =>
 			targets.every((p) => p.exitCode !== null || p.signalCode !== null),
 		);
-		expect(readFileSync(path.join(dir, "code-sidecar.exe"), "utf8")).toBe(
+		expect(readFileSync(path.join(dir, "cline-qb-sidecar.exe"), "utf8")).toBe(
 			"replaced",
 		);
 		expect(beta.exitCode).toBeNull();
@@ -232,14 +232,14 @@ SectionEnd
 	test("uninstaller releases the same files before deleting them", async () => {
 		const dir = path.join(root, "uninstall");
 		expect(await run(installer, ["/S", `/D=${dir}`])).toBe(0);
-		copyFileSync(fixture, path.join(dir, "code-sidecar.exe"));
-		const target = await start(dir, "code-sidecar.exe");
+		copyFileSync(fixture, path.join(dir, "cline-qb-sidecar.exe"));
+		const target = await start(dir, "cline-qb-sidecar.exe");
 		// _?= disables NSIS's temp-copy trampoline so we wait for the real exit.
 		expect(
 			await run(path.join(dir, "uninstall.exe"), ["/S", `_?=${dir}`]),
 		).toBe(0);
 		await waitFor(() => target.exitCode !== null || target.signalCode !== null);
-		expect(existsSync(path.join(dir, "code-sidecar.exe"))).toBe(false);
+		expect(existsSync(path.join(dir, "cline-qb-sidecar.exe"))).toBe(false);
 	}, 120_000);
 
 	// Only silent mode is automatable: passive (/P, what the Tauri updater
@@ -248,10 +248,10 @@ SectionEnd
 		const dir = path.join(root, "failure");
 		// RmRegisterResources rejects directories with ERROR_ACCESS_DENIED.
 		// This exercises a real native error, not an injected API mock.
-		mkdirSync(path.join(dir, "cline-app.exe"), { recursive: true });
-		writeFileSync(path.join(dir, "code-sidecar.exe"), "untouched");
+		mkdirSync(path.join(dir, "cline-qb-app.exe"), { recursive: true });
+		writeFileSync(path.join(dir, "cline-qb-sidecar.exe"), "untouched");
 		expect(await run(installer, ["/S", `/D=${dir}`])).toBe(2);
-		expect(readFileSync(path.join(dir, "code-sidecar.exe"), "utf8")).toBe(
+		expect(readFileSync(path.join(dir, "cline-qb-sidecar.exe"), "utf8")).toBe(
 			"untouched",
 		);
 		expect(existsSync(path.join(dir, "uninstall.exe"))).toBe(false);

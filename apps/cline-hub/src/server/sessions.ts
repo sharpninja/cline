@@ -5,6 +5,7 @@ import {
 	SessionSource,
 } from "@cline/core";
 import type { MessageWithMetadata } from "@cline/llms";
+import { requireDirectProvider } from "@cline/qbrain-governance/cloud-policy";
 import type { WebviewConfig, WebviewReasonLevel } from "../webview-protocol";
 import { rejectPendingApprovalsForSession } from "./approvals";
 import { providerSettingsManager, workspaceRoot } from "./deps";
@@ -44,29 +45,36 @@ export function resolveLaunchContext(
 	ctx: HubContext,
 	override?: Partial<SessionContext> & WebviewConfig,
 ): SessionContext {
-	const providerId =
-		override?.provider ??
-		override?.providerId ??
-		ctx.lastSessionContext?.providerId ??
-		providerSettingsManager.getLastUsedProviderSettings()?.provider ??
-		process.env.CLINE_PROVIDER?.trim() ??
-		"";
-	const modelId =
+	const explicitProvider = override?.provider ?? override?.providerId;
+	const selection =
+		explicitProvider !== undefined
+			? {
+					provider: explicitProvider,
+					model: override?.model ?? override?.modelId,
+				}
+			: ctx.lastSessionContext
+				? {
+						provider: ctx.lastSessionContext.providerId,
+						model: ctx.lastSessionContext.modelId,
+					}
+				: (providerSettingsManager.getLastUsedProviderSettings() ?? {
+						provider: process.env.CLINE_QB_PROVIDER?.trim(),
+						model: process.env.CLINE_QB_MODEL?.trim(),
+					});
+	const providerId = requireDirectProvider(selection.provider);
+	const modelId = (
 		override?.model ??
 		override?.modelId ??
-		ctx.lastSessionContext?.modelId ??
-		providerSettingsManager.getLastUsedProviderSettings()?.model ??
-		process.env.CLINE_MODEL?.trim() ??
-		"";
+		selection.model
+	)?.trim();
+	if (!modelId)
+		throw new Error(
+			"No model configured for this provider. Select a direct provider and model, or set CLINE_QB_PROVIDER and CLINE_QB_MODEL.",
+		);
 	const root =
 		override?.workspaceRoot ??
 		ctx.lastSessionContext?.workspaceRoot ??
 		workspaceRoot;
-	if (!providerId || !modelId) {
-		throw new Error(
-			"No provider/model available. Start a session in another Cline client first, or set CLINE_PROVIDER and CLINE_MODEL.",
-		);
-	}
 	return {
 		workspaceRoot: root,
 		cwd: override?.cwd ?? ctx.lastSessionContext?.cwd ?? root,
@@ -92,6 +100,8 @@ function buildSessionStartInput(
 		initialMessages?: MessageWithMetadata[];
 	},
 ): ClineCoreStartInput {
+	requireDirectProvider(context.providerId);
+
 	const mode = options?.mode === "plan" ? "plan" : "act";
 	const reasoningOptions = toRuntimeReasoningOptions(options?.reasonLevel);
 	return {
@@ -273,6 +283,9 @@ export async function sendMessage(
 		await createSession(ctx, peer, text, config, attachments);
 		return;
 	}
+	const existing = await ctx.cline.get(peer.selectedSessionId);
+	if (!existing) throw new Error("Session not found.");
+	requireDirectProvider(existing.provider);
 	await ctx.cline.send({
 		sessionId: peer.selectedSessionId,
 		prompt: text,

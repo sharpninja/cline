@@ -1,3 +1,5 @@
+import { resolve } from "node:path"
+import { getStorageNamespace, validateStoragePath } from "@cline/shared/storage"
 import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../services/telemetry"
 import { getAllHooksDirs } from "../storage/disk"
@@ -49,8 +51,8 @@ interface ExtensionContext {
 export class HookDiscoveryCache {
 	private static instance: HookDiscoveryCache | null = null
 
-	// Cache: hookName -> discovered script paths
-	private cache = new Map<HookName, HookCacheEntry>()
+	// Cache: hook name plus directory snapshot -> discovered script paths
+	private cache = new Map<string, HookCacheEntry>()
 
 	// Watchers: directory path -> file watcher
 	private watchers = new Map<string, FileWatcher>()
@@ -58,8 +60,8 @@ export class HookDiscoveryCache {
 	// Directories we've tried to watch (even if watcher creation failed)
 	private watchedDirs = new Set<string>()
 
-	// Currently scanning promises (to prevent concurrent scans)
-	private scanningPromises = new Map<HookName, Promise<string[]>>()
+	// Concurrent scans are shared only within the same directory snapshot.
+	private scanningPromises = new Map<string, Promise<string[]>>()
 
 	// For disposal
 	private context: ExtensionContext | null = null
@@ -106,13 +108,16 @@ export class HookDiscoveryCache {
 	 * @param hooksDirs Optional snapshot of the hooks directories to scan on a
 	 * cache miss. Callers that already resolved the window's workspace roots
 	 * pass this so discovery uses the same snapshot as cwd selection and hook
-	 * input metadata (and the miss costs no extra host lookup). Ignored on a
-	 * cache hit.
+	 * input metadata. The directory snapshot is part of the key on every
+	 * lookup, including cache hits.
 	 */
 	async get(hookName: HookName, hooksDirs?: string[]): Promise<string[]> {
+		const scopedDirs = [...(hooksDirs ?? (await getAllHooksDirs()))].map((dir) => resolve(dir))
+		for (const dir of scopedDirs) validateStoragePath(dir)
+		const cacheKey = JSON.stringify([hookName, ...scopedDirs])
 		this.log(`Getting hooks for ${hookName}`)
 
-		const cached = this.cache.get(hookName)
+		const cached = this.cache.get(cacheKey)
 		const cacheHit = cached !== undefined
 
 		let scripts: string[]
@@ -125,7 +130,7 @@ export class HookDiscoveryCache {
 			this.log(`Cache miss for ${hookName}, scanning...`)
 
 			// Check if scan is already in progress
-			const existingPromise = this.scanningPromises.get(hookName)
+			const existingPromise = this.scanningPromises.get(cacheKey)
 			if (existingPromise) {
 				// Another caller is already scanning, reuse their promise
 				this.log(`Reusing existing scan for ${hookName}`)
@@ -133,7 +138,7 @@ export class HookDiscoveryCache {
 			} else {
 				// This caller initiates the scan
 				initiatedScan = true
-				scripts = await this.scan(hookName, hooksDirs)
+				scripts = await this.scan(hookName, scopedDirs)
 			}
 		}
 
@@ -147,15 +152,17 @@ export class HookDiscoveryCache {
 			)
 		}
 
-		return scripts
+		for (const script of scripts) validateStoragePath(script)
+		return [...scripts]
 	}
 
 	/**
 	 * Scan for hook scripts and cache the result
 	 */
-	private async scan(hookName: HookName, knownHooksDirs?: string[]): Promise<string[]> {
+	private async scan(hookName: HookName, knownHooksDirs: string[]): Promise<string[]> {
+		const cacheKey = JSON.stringify([hookName, ...knownHooksDirs])
 		// Check if a scan is already in progress for this hook
-		const existingPromise = this.scanningPromises.get(hookName)
+		const existingPromise = this.scanningPromises.get(cacheKey)
 		if (existingPromise) {
 			this.log(`Already scanning ${hookName}, waiting for existing scan...`)
 			return existingPromise
@@ -163,10 +170,12 @@ export class HookDiscoveryCache {
 
 		// Create a new scan promise
 		const scanPromise = (async () => {
+			// Register the promise before synchronous policy failures can settle it.
+			await Promise.resolve()
 			try {
 				// Use the caller's hooks-dir snapshot when provided, otherwise
 				// resolve the current hooks directories
-				const hooksDirs = knownHooksDirs ?? (await getAllHooksDirs())
+				const hooksDirs = knownHooksDirs
 				this.log(`Scanning ${hooksDirs.length} directories for ${hookName}`)
 
 				// Ensure watchers are set up for each directory (lazy initialization)
@@ -183,24 +192,26 @@ export class HookDiscoveryCache {
 				this.log(`Found ${scripts.length} scripts for ${hookName}`)
 
 				// Cache the result
-				this.cache.set(hookName, {
+				this.cache.set(cacheKey, {
 					scriptPaths: scripts,
 					timestamp: Date.now(),
 				})
 
-				return scripts
+				for (const script of scripts) validateStoragePath(script)
+				return [...scripts]
 			} catch (error) {
 				Logger.error(`Error scanning for ${hookName} hooks:`, error)
+				if (getStorageNamespace()) throw error
 				// Return empty array on error - don't break the whole system
 				return []
 			} finally {
 				// Remove from scanning promises map
-				this.scanningPromises.delete(hookName)
+				this.scanningPromises.delete(cacheKey)
 			}
 		})()
 
 		// Store the promise so concurrent calls can await it
-		this.scanningPromises.set(hookName, scanPromise)
+		this.scanningPromises.set(cacheKey, scanPromise)
 
 		return scanPromise
 	}
@@ -209,6 +220,7 @@ export class HookDiscoveryCache {
 	 * Ensure a file watcher exists for the given directory
 	 */
 	private ensureWatcher(dir: string): void {
+		validateStoragePath(dir)
 		// Skip if already watching or tried to watch
 		if (this.watchedDirs.has(dir)) {
 			return
@@ -229,7 +241,13 @@ export class HookDiscoveryCache {
 
 		try {
 			// Create watcher using the provided function
-			const watcher = this.createFileWatcher(dir)
+			const watcher = this.createFileWatcher(validateStoragePath(dir))
+			try {
+				validateStoragePath(dir)
+			} catch (error) {
+				watcher?.dispose()
+				throw error
+			}
 
 			if (!watcher) {
 				this.log(`Watcher creation returned null for ${dir}`)
@@ -254,6 +272,8 @@ export class HookDiscoveryCache {
 
 			this.log(`Created watcher for ${dir}`)
 		} catch (error) {
+			this.watchedDirs.delete(dir)
+			validateStoragePath(dir)
 			// Log but don't fail - directory might not exist yet
 			this.log(`Failed to create watcher for ${dir}: ${error}`)
 		}

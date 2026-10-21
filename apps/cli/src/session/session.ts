@@ -11,10 +11,6 @@ import {
 	listSessionHistoryFromBackend,
 	resolveSessionBackend,
 } from "@cline/core";
-import {
-	createCliMessagesArtifactUploader,
-	prepareCliEnterpriseIntegration,
-} from "../utils/enterprise";
 import { getCliFeatureFlagsService } from "../utils/feature-flags";
 import { resolveWorkspaceRoot } from "../utils/helpers";
 import { getCliTelemetryService } from "../utils/telemetry";
@@ -63,12 +59,6 @@ export async function createCliCore(options?: {
 		featureFlags,
 		logger: options?.logger,
 		toolPolicies: options?.toolPolicies,
-		messagesArtifactUploader: createCliMessagesArtifactUploader(),
-		prepare: prepareCliEnterpriseIntegration,
-	});
-	// Refresh cached flags without putting PostHog on the CLI startup path.
-	void core.featureFlags.poll().catch((error) => {
-		options?.logger?.error?.("Error polling CLI feature flags", { error });
 	});
 	options?.logger?.log("CLI core runtime routing selected", {
 		backendMode: explicitBackendMode ?? "env-managed",

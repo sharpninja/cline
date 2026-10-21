@@ -3,6 +3,7 @@ import {
 	type ProviderSettingsManager,
 	saveLocalProviderSettings,
 } from "@cline/core";
+import { assertDirectProvider } from "../../../utils/cloud-policy";
 import {
 	type DialogDismissKey,
 	isAnyKeyDismiss,
@@ -28,6 +29,7 @@ export async function saveManualProviderApiKey(
 	providerId: string,
 	apiKey: string,
 ): Promise<void> {
+	assertDirectProvider(providerId);
 	// Empty strings delete these keys from the stored auth object.
 	const clearedAuth = { accessToken: "", refreshToken: "", apiKey: "" };
 	const storageProviderId = getProviderAuthStorageId(providerId) ?? providerId;

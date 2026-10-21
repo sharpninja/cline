@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveClineDir, validateStoragePath } from "@cline/shared/storage"
 import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
@@ -124,10 +125,11 @@ class ClineEndpoint {
 
 	/**
 	 * Returns the path to the endpoints.json configuration file.
-	 * Located at ~/.cline/endpoints.json
+	 * Located under the registered host root, or ~/.cline for library compatibility.
 	 */
 	private static getEndpointsFilePath(): string {
-		return path.join(os.homedir(), ".cline", "endpoints.json")
+		const root = getStorageNamespace() ? resolveClineDir() : path.join(os.homedir(), ".cline")
+		return validateStoragePath(path.join(root, "endpoints.json"))
 	}
 
 	/**
@@ -135,23 +137,25 @@ class ClineEndpoint {
 	 * Located in the extension installation directory.
 	 */
 	private static getBundledEndpointsFilePath(): string {
-		return path.join(ClineEndpoint._extensionFsPath, "endpoints.json")
+		return validateStoragePath(path.join(ClineEndpoint._extensionFsPath, "endpoints.json"))
 	}
 
 	/**
 	 * Loads and validates the endpoints.json file.
 	 * Checks bundled location first, then falls back to user directory.
-	 * Priority: bundled endpoints.json → ~/.cline/endpoints.json → null (standard mode)
+	 * Priority: bundled endpoints.json → active user root/endpoints.json → null (standard mode)
 	 * @returns The validated endpoints config, or null if no file exists
 	 * @throws ClineConfigurationError if a file exists but is invalid
 	 */
 	private static async loadEndpointsFile(): Promise<EndpointsFileSchema | null> {
 		// 1. Try bundled file
 		const bundledPath = ClineEndpoint.getBundledEndpointsFilePath()
+		let bundledAccessible = false
 		try {
 			await fs.access(bundledPath)
+			bundledAccessible = true
 			// File exists, load and validate it
-			const fileContent = await fs.readFile(bundledPath, "utf8")
+			const fileContent = await fs.readFile(validateStoragePath(bundledPath), "utf8")
 			let data: unknown
 
 			try {
@@ -170,21 +174,31 @@ class ClineEndpoint {
 			if (error instanceof ClineConfigurationError) {
 				throw error
 			}
-			// Bundled file doesn't exist or is not accessible, try user file
+			if (getStorageNamespace() && (bundledAccessible || (error as NodeJS.ErrnoException)?.code !== "ENOENT")) {
+				throw new ClineConfigurationError(
+					`Failed to read bundled endpoints configuration file (${bundledPath}): ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+			// A missing optional bundle permits the user configuration.
 		}
 
-		// 2. Try ~/.cline/endpoints.json
+		// 2. Try the user endpoints file under the active storage root.
 		const userPath = ClineEndpoint.getEndpointsFilePath()
 		try {
 			await fs.access(userPath)
-		} catch {
-			// File doesn't exist - not on-premise mode
+		} catch (error) {
+			if (getStorageNamespace() && (error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+				throw new ClineConfigurationError(
+					`Failed to access user endpoints configuration file (${userPath}): ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+			// A missing optional user configuration permits standard mode.
 			return null
 		}
 
 		// File exists, must be valid or we fail
 		try {
-			const fileContent = await fs.readFile(userPath, "utf8")
+			const fileContent = await fs.readFile(validateStoragePath(userPath), "utf8")
 			let data: unknown
 
 			try {
@@ -273,7 +287,9 @@ class ClineEndpoint {
 	 */
 	public setEnvironment(env: string) {
 		if (this.onPremiseConfig) {
-			throw new Error("Cannot change environment in on-premise mode. Endpoints are configured via ~/.cline/endpoints.json")
+			throw new Error(
+				"Cannot change environment in on-premise mode. Endpoints are configured by the active endpoints.json file.",
+			)
 		}
 
 		switch (env.toLowerCase()) {

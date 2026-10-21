@@ -1,3 +1,4 @@
+import "./storage-bootstrap";
 import { homedir } from "node:os";
 import {
 	checkManagedHubBuildMismatch,
@@ -180,9 +181,9 @@ async function main() {
 	// init has already settled the hub state, so check once right away. The
 	// broadcast reaches webviews that are already connected; the replay in
 	// createWebSocketHandler covers ones that connect later. Skipped when
-	// CLINE_HUB_PORT pins an explicit endpoint, matching the watcher: such
+	// CLINE_QB_HUB_PORT pins an explicit endpoint, matching the watcher: such
 	// hosts keep protocol-only compatibility and must not show update prompts.
-	if (!process.env.CLINE_HUB_PORT?.trim()) {
+	if (!process.env.CLINE_QB_HUB_PORT?.trim()) {
 		void checkManagedHubBuildMismatch()
 			.then((mismatch) => {
 				if (!mismatch || ctx.hubBuildMismatch) {

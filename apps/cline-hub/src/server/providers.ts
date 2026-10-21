@@ -9,6 +9,10 @@ import {
 	normalizeOAuthProvider,
 	saveLocalProviderSettings,
 } from "@cline/core";
+import {
+	isClineCloudProvider,
+	requireDirectProvider,
+} from "@cline/qbrain-governance/cloud-policy";
 import { isChatCompatibleModel } from "@cline/shared";
 import type {
 	WebviewInboundMessage,
@@ -25,16 +29,20 @@ export function resolveBrowserDefaults(ctx: HubContext): {
 	workspaceRoot: string;
 	cwd: string;
 } {
-	const lastUsed = providerSettingsManager.getLastUsedProviderSettings();
+	const remembered = ctx.lastSessionContext
+		? {
+				provider: ctx.lastSessionContext.providerId,
+				model: ctx.lastSessionContext.modelId,
+			}
+		: providerSettingsManager.getLastUsedProviderSettings();
+	const provider =
+		remembered?.provider ?? process.env.CLINE_QB_PROVIDER?.trim();
+	if (provider) requireDirectProvider(provider);
 	return {
-		provider:
-			lastUsed?.provider ??
-			ctx.lastSessionContext?.providerId ??
-			process.env.CLINE_PROVIDER?.trim(),
-		model:
-			lastUsed?.model ??
-			ctx.lastSessionContext?.modelId ??
-			process.env.CLINE_MODEL?.trim(),
+		provider,
+		model: remembered?.provider
+			? remembered.model
+			: process.env.CLINE_QB_MODEL?.trim(),
 		workspaceRoot: ctx.lastSessionContext?.workspaceRoot ?? workspaceRoot,
 		cwd:
 			ctx.lastSessionContext?.cwd ??
@@ -50,7 +58,9 @@ export async function loadProviders(
 	await ensureCustomProvidersLoaded(providerSettingsManager);
 	const state = providerSettingsManager.read();
 	const defaults = resolveBrowserDefaults(ctx);
-	const ids = Llms.getProviderIds().sort((a, b) => a.localeCompare(b));
+	const ids = Llms.getProviderIds()
+		.filter((id) => !isClineCloudProvider(id))
+		.sort((a, b) => a.localeCompare(b));
 	const providers = (
 		await Promise.all(
 			ids.map(async (id) => {
@@ -67,10 +77,9 @@ export async function loadProviders(
 		)
 	).filter((provider) => provider.enabled);
 	ctx.send(peer, { type: "providers", providers });
-	const selected =
-		(defaults.provider &&
-			providers.find((provider) => provider.id === defaults.provider)) ||
-		providers[0];
+	const selected = defaults.provider
+		? providers.find((provider) => provider.id === defaults.provider)
+		: undefined;
 	if (selected) {
 		// Endpoint-owned model lists (LiteLLM etc.) reject when the host is
 		// unreachable; report it without aborting the rest of peer setup.
@@ -88,7 +97,7 @@ export async function loadModels(
 	peer: BrowserPeer,
 	providerId: string,
 ): Promise<void> {
-	const provider = providerId.trim();
+	const provider = requireDirectProvider(providerId);
 	if (!provider) return;
 	const payload = await getLocalProviderModels(
 		provider,
@@ -124,7 +133,7 @@ export async function sendProviderCatalog(
 ): Promise<void> {
 	await ensureCustomProvidersLoaded(providerSettingsManager);
 	const payload = await listLocalProviders(providerSettingsManager, {
-		isClinePassEnabled: true,
+		includeProvider: (id) => !isClineCloudProvider(id),
 	});
 	ctx.send(peer, {
 		type: "provider_catalog",
@@ -138,6 +147,7 @@ export async function saveProviderSettings(
 	peer: BrowserPeer,
 	frame: Extract<WebviewInboundMessage, { type: "saveProviderSettings" }>,
 ): Promise<void> {
+	requireDirectProvider(frame.providerId);
 	const result = await saveLocalProviderSettings(providerSettingsManager, {
 		providerId: frame.providerId,
 		enabled: frame.enabled,
@@ -158,7 +168,7 @@ export async function runProviderOAuthLogin(
 	peer: BrowserPeer,
 	providerId: string,
 ): Promise<void> {
-	const normalized = normalizeOAuthProvider(providerId);
+	const normalized = normalizeOAuthProvider(requireDirectProvider(providerId));
 	const saved = await loginAndSaveLocalProviderOAuthCredentials(
 		providerSettingsManager,
 		normalized,

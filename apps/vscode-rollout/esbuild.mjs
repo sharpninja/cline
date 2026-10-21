@@ -1,16 +1,9 @@
 import esbuild from "esbuild";
+import qbrainBuildDefines from "../qbrain-build-defines.json" with {
+	type: "json",
+};
 
 const production = process.argv.includes("--production");
-
-// Same build-time secret injection scheme as apps/vscode/esbuild.mjs: CI
-// provides TELEMETRY_SERVICE_API_KEY; local builds leave it undefined and the
-// loader skips all PostHog calls (everyone stays on legacy).
-const define = {};
-if (process.env.TELEMETRY_SERVICE_API_KEY) {
-	define["process.env.TELEMETRY_SERVICE_API_KEY"] = JSON.stringify(
-		process.env.TELEMETRY_SERVICE_API_KEY,
-	);
-}
 
 await esbuild.build({
 	entryPoints: ["src/extension.ts"],
@@ -22,6 +15,6 @@ await esbuild.build({
 	external: ["vscode"],
 	minify: production,
 	sourcemap: !production,
-	define,
+	define: qbrainBuildDefines,
 	logLevel: "info",
 });

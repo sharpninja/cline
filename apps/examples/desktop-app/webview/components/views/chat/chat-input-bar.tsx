@@ -1,4 +1,5 @@
 "use client";
+import { isClineCloudProvider } from "@cline/qbrain-governance/cloud-policy";
 
 import {
 	CLINE_DEFAULT_MODEL_ID,
@@ -50,10 +51,7 @@ import {
 	buildModelPickerData,
 	type ModelPickerData,
 } from "@/lib/featured-models";
-import {
-	imageAttachmentMediaType,
-	isSupportedImageAttachment,
-} from "@/lib/image-attachments";
+import { imageAttachmentMediaType } from "@/lib/image-attachments";
 import {
 	readModelSelectionStorageFromWindow,
 	readReasoningSelectionStorageFromWindow,
@@ -473,11 +471,7 @@ function ChatInputBarImpl({
 		},
 		[model, provider],
 	);
-	const needsCloudRepository =
-		executionTarget === "cloud" && !hasActiveSession && !repoUrl?.trim();
-	const [cloudModelReady, setCloudModelReady] = useState(false);
-	const needsCloudModel =
-		executionTarget === "cloud" && !hasActiveSession && !cloudModelReady;
+	const cloudUnavailable = executionTarget === "cloud";
 	const cloudSettingsLocked = executionTarget === "cloud" && hasActiveSession;
 	const cloudContextLabel = useMemo(
 		() =>
@@ -513,17 +507,14 @@ function ChatInputBarImpl({
 	}, [executionTarget]);
 	const handleAttachFiles = useCallback(
 		(files: File[]) => {
-			const supportedFiles =
-				executionTarget === "cloud"
-					? files.filter(isSupportedImageAttachment)
-					: files;
-			if (supportedFiles.length !== files.length) {
+			if (executionTarget === "cloud") {
 				toast({
-					title: "Unsupported cloud attachment",
-					description:
-						"Choose PNG, JPEG, GIF, or WebP images, or switch to Local to attach other files.",
+					title: "Cloud unavailable",
+					description: CLOUD_UNAVAILABLE_MESSAGE,
 				});
+				return;
 			}
+			const supportedFiles = files;
 			const allowed = imagesUnsupported
 				? supportedFiles.filter((file) => !imageAttachmentMediaType(file))
 				: supportedFiles;
@@ -541,13 +532,16 @@ function ChatInputBarImpl({
 		? attachments.filter((attachment) => attachment.isImage).length
 		: 0;
 	const canSend =
-		hasDraft &&
-		!speechInputActive &&
-		!needsCloudRepository &&
-		!needsCloudModel &&
-		!readOnly;
+		hasDraft && !speechInputActive && !cloudUnavailable && !readOnly;
 	const steeringPromptRef = useRef(false);
 	const steerFirstQueuedPrompt = async () => {
+		if (cloudUnavailable) {
+			toast({
+				title: "Cloud unavailable",
+				description: CLOUD_UNAVAILABLE_MESSAGE,
+			});
+			return;
+		}
 		const firstPrompt = promptsInQueue[0];
 		if (!firstPrompt || firstPrompt.steer || steeringPromptRef.current) return;
 		steeringPromptRef.current = true;
@@ -568,12 +562,11 @@ function ChatInputBarImpl({
 		}
 	};
 	const handleSend = useCallback(() => {
-		if (speechInputActive || readOnly) return;
+		if (cloudUnavailable || speechInputActive || readOnly) return;
 		if (unsupportedDraftImageCount > 0) {
 			reportUnsupportedImages();
 			return;
 		}
-		if (needsCloudRepository || needsCloudModel) return;
 		const prompt = promptInput.trim();
 		if (!prompt) {
 			toast({
@@ -586,8 +579,7 @@ function ChatInputBarImpl({
 		setPromptInput("");
 		onSend(prompt);
 	}, [
-		needsCloudRepository,
-		needsCloudModel,
+		cloudUnavailable,
 		readOnly,
 		onSend,
 		promptInput,
@@ -792,14 +784,7 @@ function ChatInputBarImpl({
 		() => resolveEffortIndex(thinking, reasoningEffort),
 		[reasoningEffort, thinking],
 	);
-	useEffect(() => {
-		if (
-			executionTarget === "cloud" &&
-			normalizeProviderId(provider) !== "cline"
-		) {
-			onProviderChange("cline");
-		}
-	}, [executionTarget, onProviderChange, provider]);
+
 	const hasExplicitReasoningSelection =
 		thinking !== undefined || reasoningEffort !== undefined;
 	const effortLabel =
@@ -1113,9 +1098,15 @@ function ChatInputBarImpl({
 			<AgentComposerBody variant={variant} hasQueue={promptsInQueue.length > 0}>
 				<AgentPromptQueue
 					items={displayPromptsInQueue}
-					onEdit={onEditPromptInQueue}
-					onRemove={onRemovePromptInQueue}
-					onSteer={onSteerPromptInQueue}
+					onEdit={
+						cloudUnavailable ? rejectCloudQueueAction : onEditPromptInQueue
+					}
+					onRemove={
+						cloudUnavailable ? rejectCloudQueueAction : onRemovePromptInQueue
+					}
+					onSteer={
+						cloudUnavailable ? rejectCloudQueueAction : onSteerPromptInQueue
+					}
 				/>
 				<div className="relative">
 					{slashOpen && (
@@ -1364,8 +1355,8 @@ function ChatInputBarImpl({
 							placeholder={
 								speechInputProcessing
 									? "Transcribing voice input…"
-									: needsCloudRepository
-										? "Choose a repository"
+									: cloudUnavailable
+										? "Cline Cloud is unavailable. Select Local or an SSH host."
 										: isBusy && variant !== "welcome"
 											? promptsInQueue.length > 0
 												? "Agent is working... submit to queue another message, or Enter to send the first message from the queue"
@@ -1387,12 +1378,12 @@ function ChatInputBarImpl({
 							value={promptInput}
 						/>
 						<AgentComposerActions variant={variant}>
-							{needsCloudRepository ? (
+							{cloudUnavailable ? (
 								<span
 									aria-live="polite"
 									className="max-w-40 text-right text-[11px] leading-4 text-muted-foreground"
 								>
-									Repository required
+									Cloud unavailable
 								</span>
 							) : null}
 							{canAbort && (
@@ -1439,8 +1430,8 @@ function ChatInputBarImpl({
 									disabled={!canSend}
 									onClick={handleSend}
 									title={
-										needsCloudRepository
-											? "Choose a repository"
+										cloudUnavailable
+											? "Cline Cloud is unavailable. Select Local or an SSH host."
 											: "Send (Enter)"
 									}
 									type="button"
@@ -1550,7 +1541,6 @@ function ChatInputBarImpl({
 							includeCloudModels={executionTarget === "cloud"}
 							isBusy={isBusy}
 							model={model}
-							onModelReadyChange={setCloudModelReady}
 							onModelChange={onModelChange}
 							onModelSupportsImagesChange={handleModelSupportsImagesChange}
 							onModelSupportsReasoningChange={
@@ -1650,6 +1640,11 @@ export const ChatInputBar = memo(ChatInputBarImpl);
 // should not re-render for every keystroke in the composer textarea.
 /** Sentinel provider-picker row that opens Settings → Providers instead of selecting. */
 const ADD_PROVIDER_OPTION_VALUE = "__add-provider__";
+const CLOUD_UNAVAILABLE_MESSAGE =
+	"Cline Cloud is unavailable. Select Local or an SSH host.";
+function rejectCloudQueueAction(): never {
+	throw new Error(CLOUD_UNAVAILABLE_MESSAGE);
+}
 
 const ModelSelector = memo(function ModelSelector({
 	allowedProviderIds,
@@ -1661,7 +1656,6 @@ const ModelSelector = memo(function ModelSelector({
 	isBusy,
 	onProviderChange,
 	onModelChange,
-	onModelReadyChange,
 	onModelSupportsReasoningChange,
 	onModelSupportsImagesChange,
 	onOpenModelSettings,
@@ -1675,7 +1669,6 @@ const ModelSelector = memo(function ModelSelector({
 	isBusy: boolean;
 	onProviderChange: (provider: string) => void;
 	onModelChange: (model: string) => void;
-	onModelReadyChange: (ready: boolean) => void;
 	onModelSupportsReasoningChange: (supportsReasoning: boolean | null) => void;
 	onModelSupportsImagesChange: (supported: boolean | null) => void;
 	/** Opens Settings → Providers; adds a "set up another provider" row when set. */
@@ -1704,16 +1697,10 @@ const ModelSelector = memo(function ModelSelector({
 	);
 	const [catalogRevision, setCatalogRevision] = useState(0);
 	const [mobileOpen, setMobileOpen] = useState(false);
-	const normalizedProvider = includeCloudModels
-		? (Object.keys(providerModels).find((id) =>
-				providerModels[id]?.includes(model),
-			) ??
-			(model.startsWith("cline-pass/")
-				? "cline-pass"
-				: model.startsWith("cline-cloud/")
-					? "cline-cloud"
-					: "cline"))
-		: normalizeProviderId(provider);
+	const normalizedProvider =
+		includeCloudModels || isClineCloudProvider(provider)
+			? ""
+			: normalizeProviderId(provider);
 	useEffect(() => {
 		if (!includeCloudModels) return;
 		return desktopClient.subscribe("cloud_sessions_changed", () => {
@@ -1731,6 +1718,7 @@ const ModelSelector = memo(function ModelSelector({
 	);
 	const applyProviderModels = useCallback(
 		(providerId: string, models: ProviderModel[]) => {
+			if (isClineCloudProvider(providerId)) return;
 			setProviderModels((current) => ({
 				...current,
 				[providerId]: models.map((entry) => entry.id),
@@ -1774,6 +1762,7 @@ const ModelSelector = memo(function ModelSelector({
 	const visibleProviderModels = useMemo(() => {
 		const next: Record<string, string[]> = {};
 		for (const providerId of enabledProviderIds) {
+			if (isClineCloudProvider(providerId)) continue;
 			if (allowedProviderIds && !allowedProviderIds.includes(providerId)) {
 				continue;
 			}
@@ -1786,31 +1775,10 @@ const ModelSelector = memo(function ModelSelector({
 		[visibleProviderModels],
 	);
 	const rememberedLastProvider = lastSelection.lastProvider.trim();
-	const resolvedProvider = useMemo(() => {
-		if (providers.length === 0) {
-			return "";
-		}
-		const rememberedProvider = normalizeProviderId(rememberedLastProvider);
-		if (normalizedProvider && providers.includes(normalizedProvider)) {
-			return normalizedProvider;
-		}
-		if (rememberedProvider && providers.includes(rememberedProvider)) {
-			return rememberedProvider;
-		}
-		return providers[0] ?? "";
-	}, [normalizedProvider, providers, rememberedLastProvider]);
-	useEffect(() => {
-		onModelReadyChange(
-			providers.includes(normalizedProvider) &&
-				(providerModels[normalizedProvider]?.includes(model) ?? false),
-		);
-	}, [
-		model,
-		normalizedProvider,
-		onModelReadyChange,
-		providerModels,
-		providers,
-	]);
+	// Catalog availability never authorizes replacing the operator's provider.
+	const resolvedProvider = providers.includes(normalizedProvider)
+		? normalizedProvider
+		: "";
 	const modelsForProvider = useMemo(
 		() => visibleProviderModels[resolvedProvider] ?? [],
 		[resolvedProvider, visibleProviderModels],
@@ -1858,6 +1826,7 @@ const ModelSelector = memo(function ModelSelector({
 		[modelPicker],
 	);
 	const resolvedModel = useMemo(() => {
+		if (!resolvedProvider) return "";
 		const rememberedModel =
 			lastSelection.lastModelByProvider[resolvedProvider] ??
 			(normalizeProviderId(rememberedLastProvider) === resolvedProvider
@@ -1886,11 +1855,7 @@ const ModelSelector = memo(function ModelSelector({
 		) {
 			return rememberedModel;
 		}
-		return (
-			modelsForProvider.find((id) => pickerModelIds.has(id)) ??
-			modelsForProvider[0] ??
-			""
-		);
+		return "";
 	}, [
 		includeCloudModels,
 		autoCorrectModel,
@@ -1947,6 +1912,10 @@ const ModelSelector = memo(function ModelSelector({
 		setReasoningCapabilitySource("loading");
 
 		async function loadCatalogAndActiveModels() {
+			if (includeCloudModels) {
+				setEnabledProviderIds([]);
+				return;
+			}
 			try {
 				const payload = await loadProviderModelCatalog(
 					includeCloudModels ? { includeCloudModels: true } : undefined,
@@ -2127,7 +2096,13 @@ const ModelSelector = memo(function ModelSelector({
 				onOpenModelSettings?.();
 				return;
 			}
-			if (!includeCloudModels) onProviderChange(value);
+			if (
+				includeCloudModels ||
+				isClineCloudProvider(value) ||
+				!providers.includes(value)
+			)
+				return;
+			onProviderChange(value);
 			const rememberedModel = lastSelection.lastModelByProvider[value];
 			const providerModelIds = visibleProviderModels[value] ?? [];
 			// Preserve live-only remembered models missing from the bundled
@@ -2157,14 +2132,21 @@ const ModelSelector = memo(function ModelSelector({
 			pickerDataForProvider,
 			rememberSelection,
 			visibleProviderModels,
+			providers,
 		],
 	);
 	const handleModelSelect = useCallback(
 		(value: string) => {
+			if (
+				includeCloudModels ||
+				!resolvedProvider ||
+				isClineCloudProvider(resolvedProvider)
+			)
+				return;
 			rememberSelection(resolvedProvider, value);
 			onModelChange(value);
 		},
-		[onModelChange, rememberSelection, resolvedProvider],
+		[includeCloudModels, onModelChange, rememberSelection, resolvedProvider],
 	);
 	// The picker only lists providers with saved settings, so it is also the
 	// natural place to reach the rest of the catalog.
@@ -2193,7 +2175,7 @@ const ModelSelector = memo(function ModelSelector({
 		<SearchCombobox
 			ariaLabel="Provider"
 			className={triggerClassName}
-			disabled={isBusy || providers.length === 0}
+			disabled={isBusy || providerOptions.length === 0}
 			emptyText="No providers found."
 			onValueChange={handleProviderSelect}
 			options={providerOptions}
@@ -2227,19 +2209,11 @@ const ModelSelector = memo(function ModelSelector({
 		/>
 	);
 
-	if (
-		includeCloudModels &&
-		reasoningCapabilitySource === "fallback" &&
-		providers.length === 0
-	) {
+	if (includeCloudModels) {
 		return (
-			<button
-				className="text-xs text-destructive"
-				onClick={refreshActiveProviderModels}
-				type="button"
-			>
-				Could not load cloud models. Retry
-			</button>
+			<output>
+				Cline Cloud is unavailable. Select Local or an SSH host.
+			</output>
 		);
 	}
 	return (
@@ -2249,7 +2223,7 @@ const ModelSelector = memo(function ModelSelector({
 				aria-haspopup="dialog"
 				aria-label="Model and provider"
 				className="hidden size-7 items-center justify-center rounded-md text-foreground hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 max-[560px]:inline-flex"
-				disabled={isBusy || providers.length === 0}
+				disabled={isBusy || providerOptions.length === 0}
 				onClick={() => setMobileOpen((current) => !current)}
 				title={`${providerNames[resolvedProvider]?.trim() || resolvedProvider || "Provider"} / ${selectedModelLabel || "Model"}`}
 				type="button"

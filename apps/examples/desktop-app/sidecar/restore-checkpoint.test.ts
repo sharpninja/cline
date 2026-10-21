@@ -93,7 +93,11 @@ describe("restore_checkpoint", () => {
 			action: "restore_checkpoint",
 			sessionId,
 			checkpointRunCount: 1,
-			config: { cwd: "/tmp/project", provider: "cline", model: "test-model" },
+			config: {
+				cwd: "/tmp/project",
+				provider: "anthropic",
+				model: "test-model",
+			},
 		});
 
 		expect(ctx.liveSessions.get(sessionId)?.messages).toEqual(restoredMessages);

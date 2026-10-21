@@ -32,7 +32,10 @@ export type EnvironmentSelectorProps = {
 	activeEnvironmentId: string;
 	cloudEnabled?: boolean;
 	executionTarget?: "local" | "cloud";
-	onSelectExecutionTarget?: (target: "local" | "cloud") => void;
+	onSelectExecutionTarget?: (
+		target: "local" | "cloud",
+		selectedEnvironmentId?: string,
+	) => void;
 	profiles: RemoteEnvironmentProfile[];
 	loading?: boolean;
 	switchingEnvironmentId?: string | null;
@@ -78,7 +81,6 @@ export function buildEnvironmentSelectorModel(
 
 export function EnvironmentSelector({
 	activeEnvironmentId,
-	cloudEnabled = false,
 	executionTarget = "local",
 	onSelectExecutionTarget,
 	profiles,
@@ -98,7 +100,7 @@ export function EnvironmentSelector({
 	const pendingEnvironmentId = switchingEnvironmentId ?? internalSwitchingId;
 	const busy = loading || pendingEnvironmentId !== null;
 	const cloudSelected = executionTarget === "cloud";
-	const activeLabel = cloudSelected ? "Cloud" : model.activeLabel;
+	const activeLabel = cloudSelected ? "Cloud unavailable" : model.activeLabel;
 	const ActiveIcon = cloudSelected
 		? Cloud
 		: model.activeKind === "remote"
@@ -120,8 +122,13 @@ export function EnvironmentSelector({
 				await onSelectEnvironment(environmentId);
 			}
 			// Persist the choice only after a successful environment switch.
-			if (cloudSelected || environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID)
-				onSelectExecutionTarget?.("local");
+			if (cloudSelected || environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID) {
+				// A successful environment switch already creates its destination draft.
+				// Tell the old pane so it cannot create another draft in its old environment.
+				if (environmentId !== activeEnvironmentId)
+					onSelectExecutionTarget?.("local", environmentId);
+				else onSelectExecutionTarget?.("local");
+			}
 		} catch {
 			// The parent owns connection errors and their user-facing presentation;
 			// reopen so the failed choice does not strand the user at a closed menu.
@@ -182,20 +189,13 @@ export function EnvironmentSelector({
 				<DropdownMenuItem
 					aria-current={cloudSelected ? "true" : undefined}
 					className="aria-current:bg-purple-500/20 aria-current:focus:bg-purple-500/25"
-					disabled={!cloudEnabled || busy}
-					onSelect={() => {
-						if (!cloudSelected) onSelectExecutionTarget?.("cloud");
-					}}
+					disabled
 				>
 					<Cloud className="size-4" />
 					<span className="uppercase">Cloud</span>
-					{!cloudEnabled ? (
-						<span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
-							Coming soon
-						</span>
-					) : cloudSelected ? (
-						<Check className="ml-auto" />
-					) : null}
+					<span className="ml-auto text-xs text-muted-foreground">
+						Unavailable
+					</span>
 				</DropdownMenuItem>
 
 				<DropdownMenuSeparator />

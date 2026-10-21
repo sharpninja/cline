@@ -60,6 +60,7 @@ export interface BuiltRuntime {
 
 export interface RuntimeBuilderInput {
 	config: CoreSessionConfig;
+	configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 	/**
 	 * Host-resolved stable end-user identity, forwarded so delegated agents
 	 * (sub-agents / teammates) emit the same telemetry `userId` as the lead.

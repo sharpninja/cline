@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import type {
+	AgentRuntimeConfig,
 	AgentRuntimeHooks,
 	AgentTool,
 	ProviderErrorClass,
@@ -692,7 +693,8 @@ export const AgentResultSchema = z.object({
 /**
  * Configuration for creating an Agent
  */
-export interface AgentConfig {
+export interface AgentConfig
+	extends Pick<SessionWorkspaceEnv, "cwd" | "workspaceRoot"> {
 	/** Stable end-user identity used for provider and observability metadata. */
 	distinctId?: string;
 	/**
@@ -897,6 +899,19 @@ export interface AgentConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 	};
+	/** Host-owned completion obligations, retained even in modes without tools. */
+	completionGate?: AgentRuntimeConfig["completionGate"];
+	/** Trusted host configuration, invoked on each newly constructed runtime after
+	 * optional contribution resolution. Captured at session construction; throws
+	 * refuse execution. Delegates inherit the factory, not its per-agent state. */
+	configureAgentRuntime?: (
+		config: AgentRuntimeConfig,
+		workspace: Readonly<Pick<SessionWorkspaceEnv, "cwd" | "workspaceRoot">>,
+	) => AgentRuntimeConfig | Promise<AgentRuntimeConfig>;
+	requiredTools?: AgentRuntimeConfig["requiredTools"];
+	modelRequestGate?: AgentRuntimeConfig["modelRequestGate"];
+	toolExecutionGate?: AgentRuntimeConfig["toolExecutionGate"];
+	toolResultGate?: AgentRuntimeConfig["toolResultGate"];
 
 	// -------------------------------------------------------------------------
 	// Pending User Messages

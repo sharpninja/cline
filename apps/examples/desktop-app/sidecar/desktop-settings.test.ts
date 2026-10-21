@@ -1,4 +1,5 @@
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -7,56 +8,46 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	readDesktopSettings,
 	resolveDesktopSettingsPath,
 	setCloudSessionsEnabled,
+	writeDesktopSettings,
 } from "./desktop-settings";
-
-let dataDir: string;
-
+let dir: string;
 beforeEach(() => {
-	dataDir = mkdtempSync(join(tmpdir(), "cline-desktop-settings-"));
-	process.env.CLINE_DATA_DIR = dataDir;
+	dir = mkdtempSync(join(tmpdir(), "qb-desktop-settings-"));
+	vi.stubEnv("CLINE_DATA_DIR", dir);
 });
-
 afterEach(() => {
-	delete process.env.CLINE_DATA_DIR;
-	rmSync(dataDir, { recursive: true, force: true });
+	vi.unstubAllEnvs();
+	rmSync(dir, { recursive: true, force: true });
 });
-
-describe("desktop settings", () => {
-	it("defaults cloud sessions to off when no settings file exists", () => {
+describe("desktop cloud settings exclusion", () => {
+	it.each([
+		null,
+		"{bad",
+		JSON.stringify({ cloudSessionsEnabled: true }),
+		JSON.stringify({ cloudSessionsEnabled: false }),
+	])("reports unavailable without mutating saved state %s", (raw) => {
+		const path = resolveDesktopSettingsPath();
+		if (raw !== null) {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, raw);
+		}
 		expect(readDesktopSettings()).toEqual({ cloudSessionsEnabled: false });
-	});
-
-	it("persists the cloud sessions opt-in and reads it back", () => {
-		expect(setCloudSessionsEnabled(true)).toEqual({
-			cloudSessionsEnabled: true,
-		});
-		expect(readDesktopSettings()).toEqual({ cloudSessionsEnabled: true });
-		expect(resolveDesktopSettingsPath().endsWith("code-settings.json")).toBe(
-			true,
+		expect(() => setCloudSessionsEnabled(true)).toThrow(
+			/Cline account services are unavailable/,
 		);
-		expect(
-			JSON.parse(readFileSync(resolveDesktopSettingsPath(), "utf8")),
-		).toMatchObject({ cloudSessionsEnabled: true });
+		expect(() => writeDesktopSettings({ cloudSessionsEnabled: true })).toThrow(
+			/Cline account services are unavailable/,
+		);
 		expect(setCloudSessionsEnabled(false)).toEqual({
 			cloudSessionsEnabled: false,
 		});
-		expect(readDesktopSettings()).toEqual({ cloudSessionsEnabled: false });
-	});
-
-	it("treats malformed files and non-boolean values as off", () => {
-		mkdirSync(dirname(resolveDesktopSettingsPath()), { recursive: true });
-		writeFileSync(resolveDesktopSettingsPath(), "{not json", "utf8");
-		expect(readDesktopSettings()).toEqual({ cloudSessionsEnabled: false });
-		writeFileSync(
-			resolveDesktopSettingsPath(),
-			JSON.stringify({ cloudSessionsEnabled: "yes" }),
-			"utf8",
-		);
-		expect(readDesktopSettings()).toEqual({ cloudSessionsEnabled: false });
+		writeDesktopSettings({ cloudSessionsEnabled: false });
+		if (raw === null) expect(existsSync(path)).toBe(false);
+		else expect(readFileSync(path, "utf8")).toBe(raw);
 	});
 });

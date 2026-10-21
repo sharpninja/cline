@@ -1,6 +1,6 @@
 !include "Win\RestartManager.nsh"
 
-; The Hub re-executes code-sidecar.exe as a detached daemon and outlives the
+; The Hub re-executes cline-qb-sidecar.exe as a detached daemon and outlives the
 ; desktop. Stop users of both installed executables before replacing either:
 ; stopping only the sidecar first leaves the desktop able to spawn it again.
 ;
@@ -26,7 +26,7 @@
       Goto end_session
     ${EndIf}
 
-    !insertmacro RestartManager_RegisterFile $1 "$INSTDIR\code-sidecar.exe"
+    !insertmacro RestartManager_RegisterFile $1 "$INSTDIR\cline-qb-sidecar.exe"
     ${If} $0 != 0
       Goto end_session
     ${EndIf}

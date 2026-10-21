@@ -1,3 +1,4 @@
+import { getStorageNamespace, validateStoragePath } from "@cline/shared/storage"
 import { getSkillsDirectoriesForScan } from "@core/storage/skill-directories"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import type { SkillContent, SkillMetadata } from "@shared/skills"
@@ -69,13 +70,14 @@ export async function setSkillDisabledInFrontmatter(skillMdPath: string, enabled
 		return false
 	}
 	try {
-		const content = await fs.readFile(skillMdPath, "utf-8")
+		const content = await fs.readFile(validateStoragePath(skillMdPath), "utf-8")
 		const updated = updateSkillMarkdownDisabledState(content, enabled)
 		if (updated !== content) {
-			await fs.writeFile(skillMdPath, updated)
+			await fs.writeFile(validateStoragePath(skillMdPath), updated)
 		}
 		return true
 	} catch (error) {
+		if (getStorageNamespace()) throw error
 		Logger.warn(`Failed to update skill frontmatter at ${skillMdPath}:`, error)
 		return false
 	}
@@ -133,22 +135,46 @@ function parseFrontmatter(fileContent: string): { data: Record<string, unknown>;
 	return { data: result.data, content: result.body }
 }
 
+async function skillPathExists(filePath: string): Promise<boolean> {
+	if (!getStorageNamespace()) return fileExistsAtPath(filePath)
+	try {
+		await fs.access(validateStoragePath(filePath))
+		return true
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false
+		throw error
+	}
+}
+
+async function skillDirectoryExists(dirPath: string): Promise<boolean> {
+	if (!getStorageNamespace()) return isDirectory(dirPath)
+	try {
+		return (await fs.stat(validateStoragePath(dirPath))).isDirectory()
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false
+		throw error
+	}
+}
+
 /**
  * Scan a directory for skill subdirectories containing SKILL.md files.
  */
 async function scanSkillsDirectory(dirPath: string, source: "global" | "project"): Promise<SkillMetadata[]> {
 	const skills: SkillMetadata[] = []
 
-	if (!(await fileExistsAtPath(dirPath)) || !(await isDirectory(dirPath))) {
+	if (!(await skillPathExists(dirPath)) || !(await skillDirectoryExists(dirPath))) {
 		return skills
 	}
 
 	try {
-		const entries = await fs.readdir(dirPath)
+		const entries = await fs.readdir(validateStoragePath(dirPath))
 
 		for (const entryName of entries) {
 			const entryPath = path.join(dirPath, entryName)
-			const stats = await fs.stat(entryPath).catch(() => null)
+			const stats = await fs.stat(validateStoragePath(entryPath)).catch((error: unknown) => {
+				if (getStorageNamespace() && (error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+				return null
+			})
 			if (!stats?.isDirectory()) continue
 
 			const skill = await loadSkillMetadata(entryPath, source, entryName)
@@ -157,6 +183,7 @@ async function scanSkillsDirectory(dirPath: string, source: "global" | "project"
 			}
 		}
 	} catch (error: unknown) {
+		if (getStorageNamespace()) throw error
 		if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EACCES") {
 			Logger.warn(`Permission denied reading skills directory: ${dirPath}`)
 		}
@@ -174,10 +201,10 @@ async function loadSkillMetadata(
 	skillName: string,
 ): Promise<SkillMetadata | null> {
 	const skillMdPath = path.join(skillDir, "SKILL.md")
-	if (!(await fileExistsAtPath(skillMdPath))) return null
+	if (!(await skillPathExists(skillMdPath))) return null
 
 	try {
-		const fileContent = await fs.readFile(skillMdPath, "utf-8")
+		const fileContent = await fs.readFile(validateStoragePath(skillMdPath), "utf-8")
 		const { data: frontmatter } = parseFrontmatter(fileContent)
 
 		// Validate required fields
@@ -203,6 +230,7 @@ async function loadSkillMetadata(
 			source,
 		}
 	} catch (error) {
+		if (getStorageNamespace()) throw error
 		Logger.warn(`Failed to load skill at ${skillDir}:`, error)
 		return null
 	}
@@ -300,14 +328,15 @@ export async function getSkillContent(
 	}
 
 	try {
-		const fileContent = await fs.readFile(skill.path, "utf-8")
+		const fileContent = await fs.readFile(validateStoragePath(skill.path), "utf-8")
 		const { content: body } = parseFrontmatter(fileContent)
 
 		return {
 			...skill,
 			instructions: body.trim(),
 		}
-	} catch {
+	} catch (error) {
+		if (getStorageNamespace()) throw error
 		return null
 	}
 }

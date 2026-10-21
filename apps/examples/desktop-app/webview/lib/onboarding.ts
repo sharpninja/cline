@@ -1,4 +1,4 @@
-export const ONBOARDING_STORAGE_KEY = "cline.code.onboarding.v1";
+export const ONBOARDING_STORAGE_KEY = "cline-qb.code.onboarding.v1";
 
 /**
  * Fired on `window` when the onboarding state is reset (e.g. from the

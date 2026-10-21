@@ -1,3 +1,4 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import * as fs from "fs"
 import type { EnvironmentVariableMutator, EnvironmentVariableMutatorOptions, EnvironmentVariableScope } from "vscode"
 import * as vscode from "vscode"
@@ -87,28 +88,35 @@ export class JsonKeyValueStore<T> {
 	}
 
 	put(key: string, value: T): void {
-		this.data.set(key, value)
-		this.save()
+		const next = new Map(this.data)
+		next.set(key, value)
+		this.save(next)
+		this.data = next
 	}
 
 	delete(key: string): void {
-		this.data.delete(key)
-		this.save()
+		const next = new Map(this.data)
+		next.delete(key)
+		this.save(next)
+		this.data = next
 	}
 	keys(): Iterable<string> | ArrayLike<string> {
 		return this.data.keys()
 	}
 	private load(): void {
-		if (fs.existsSync(this.filePath)) {
-			const data = JSON.parse(fs.readFileSync(this.filePath, "utf-8"))
+		const filePath = validateStoragePath(this.filePath)
+		if (fs.existsSync(filePath)) {
+			const data = JSON.parse(fs.readFileSync(filePath, "utf-8"))
 			Object.entries(data).forEach(([k, v]) => {
 				this.data.set(k, v as T)
 			})
 		}
 	}
-	private save(): void {
-		// Use mode 0o600 to restrict file permissions to owner read/write only (fixes #7778)
-		fs.writeFileSync(this.filePath, JSON.stringify(Object.fromEntries(this.data), null, 2), { mode: 0o600 })
+	private save(data: Map<string, T>): void {
+		const serialized = JSON.stringify(Object.fromEntries(data), null, 2)
+		// Revalidate after serialization and immediately before delayed writes.
+		const filePath = validateStoragePath(this.filePath)
+		fs.writeFileSync(filePath, serialized, { mode: 0o600 })
 	}
 }
 
@@ -149,5 +157,5 @@ export class EnvironmentVariableCollection implements EnvironmentVariableCollect
 }
 
 export function readJson(filePath: string): any {
-	return JSON.parse(fs.readFileSync(filePath, "utf8"))
+	return JSON.parse(fs.readFileSync(validateStoragePath(filePath), "utf8"))
 }

@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentTool } from "@cline/shared";
+import type { AgentConfig, AgentEvent, AgentTool } from "@cline/shared";
 import {
 	createBuiltinTools,
 	resolveToolPresetName,
@@ -25,6 +25,7 @@ export type SubAgentStartTracker = Map<
 >;
 
 export interface SpawnToolDeps {
+	configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 	getSession(sessionId: string): ActiveSession | undefined;
 	subAgentStarts: SubAgentStartTracker;
 	onAgentEvent(
@@ -124,6 +125,14 @@ export function createSessionSpawnTool(
 	rootSessionId: string,
 	toolExecutors?: Partial<ToolExecutors>,
 ): AgentTool {
+	const hostBinding = deps.configureAgentRuntime
+		? Object.freeze({
+				configureAgentRuntime: deps.configureAgentRuntime,
+				sessionId: rootSessionId,
+				cwd: config.cwd,
+				workspaceRoot: config.workspaceRoot ?? config.cwd,
+			})
+		: undefined;
 	const lifecycle = createSessionSubAgentLifecycleCallbacks(
 		deps,
 		config,
@@ -140,7 +149,15 @@ export function createSessionSpawnTool(
 			: [];
 		if (config.enableSpawnAgent) {
 			tools.push(
-				createSessionSpawnTool(deps, config, rootSessionId, toolExecutors),
+				createSessionSpawnTool(
+					{
+						...deps,
+						configureAgentRuntime: hostBinding?.configureAgentRuntime,
+					},
+					config,
+					rootSessionId,
+					toolExecutors,
+				),
 			);
 		}
 		return filterDisabledTools(tools);
@@ -148,10 +165,12 @@ export function createSessionSpawnTool(
 
 	return createSpawnAgentTool({
 		configProvider: {
-			getRuntimeConfig: () =>
-				deps
+			getRuntimeConfig: () => ({
+				...(deps
 					.getSession(rootSessionId)
 					?.runtime.delegatedAgentConfigProvider?.getRuntimeConfig() ?? {
+					sessionId: rootSessionId,
+					workspaceRoot: config.workspaceRoot ?? config.cwd,
 					providerId: config.providerId,
 					modelId: config.modelId,
 					cwd: config.cwd,
@@ -166,7 +185,9 @@ export function createSessionSpawnTool(
 					extensions: config.extensions,
 					logger: config.logger,
 					telemetry: config.telemetry,
-				},
+				}),
+				...hostBinding,
+			}),
 			getConnectionConfig: () =>
 				deps
 					.getSession(rootSessionId)

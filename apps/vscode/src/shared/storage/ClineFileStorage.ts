@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
+import { validateStoragePath } from "@cline/shared/storage"
 import { Logger } from "../services/Logger"
 import { ClineSyncStorage } from "./ClineStorage"
 
@@ -49,20 +50,24 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 	 * since it only writes to disk once.
 	 */
 	public setBatch(entries: Record<string, T | undefined>): Thenable<void> {
+		// Keep the original path so later replacements are checked on every write.
+		validateStoragePath(this.fsPath)
+		const nextData = { ...this.data }
 		const changedKeys: string[] = []
 		for (const [key, value] of Object.entries(entries)) {
 			if (value === undefined) {
-				if (key in this.data) {
-					delete this.data[key]
+				if (key in nextData) {
+					delete nextData[key]
 					changedKeys.push(key)
 				}
 			} else {
-				this.data[key] = value
+				nextData[key] = value
 				changedKeys.push(key)
 			}
 		}
 		if (changedKeys.length > 0) {
-			this.writeToDisk()
+			this.writeToDisk(nextData)
+			this.data = nextData
 			for (const key of changedKeys) {
 				this.fireChange(key)
 			}
@@ -75,9 +80,11 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 	}
 
 	private readFromDisk(): Record<string, T> {
+		// A policy refusal is not a missing/corrupt file and must stay observable.
+		const filePath = validateStoragePath(this.fsPath)
 		try {
-			if (fs.existsSync(this.fsPath)) {
-				return JSON.parse(fs.readFileSync(this.fsPath, "utf-8"))
+			if (fs.existsSync(filePath)) {
+				return JSON.parse(fs.readFileSync(filePath, "utf-8"))
 			}
 		} catch (error) {
 			Logger.error(`[${this.name}] failed to read from ${this.fsPath}:`, error)
@@ -85,11 +92,14 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 		return {}
 	}
 
-	private writeToDisk(): void {
+	private writeToDisk(data: Record<string, T>): void {
+		// Serialization can invoke user toJSON callbacks; validate after it too.
+		const serialized = JSON.stringify(data, null, 2)
+		const filePath = validateStoragePath(this.fsPath)
 		try {
-			const dir = path.dirname(this.fsPath)
+			const dir = path.dirname(filePath)
 			fs.mkdirSync(dir, { recursive: true })
-			atomicWriteFileSync(this.fsPath, JSON.stringify(this.data, null, 2), this.fileMode)
+			atomicWriteFileSync(filePath, serialized, this.fileMode)
 		} catch (error) {
 			Logger.error(`[${this.name}] failed to write to ${this.fsPath}:`, error)
 		}

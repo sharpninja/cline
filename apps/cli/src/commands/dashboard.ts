@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { configureSandboxEnvironment } from "../utils/helpers";
 import open from "../utils/open";
@@ -34,8 +34,8 @@ export interface RunDashboardCommandOptions {
 	waitForShutdown?: (server: DashboardServerHandle) => Promise<void>;
 }
 
-const DASHBOARD_PORT_ENV = "CLINE_HUB_DASHBOARD_PORT";
-const WEBVIEW_DIST_ENV = "CLINE_HUB_WEBVIEW_DIST_DIR";
+const DASHBOARD_PORT_ENV = "CLINE_QB_HUB_DASHBOARD_PORT";
+const WEBVIEW_DIST_ENV = "CLINE_QB_HUB_WEBVIEW_DIST_DIR";
 
 function setEnvValue(name: string, value: string | undefined): () => void {
 	const previous = process.env[name];
@@ -52,14 +52,12 @@ function setEnvValue(name: string, value: string | undefined): () => void {
 }
 
 const SANDBOX_ENV_KEYS = [
-	"CLINE_SANDBOX",
-	"CLINE_SANDBOX_DATA_DIR",
-	"CLINE_DATA_DIR",
-	"CLINE_DB_DATA_DIR",
-	"CLINE_SESSION_DATA_DIR",
-	"CLINE_TEAM_DATA_DIR",
-	"CLINE_PROVIDER_SETTINGS_PATH",
-	"CLINE_HOOKS_LOG_PATH",
+	"CLINE_QB_SANDBOX",
+	"CLINE_QB_DATA_DIR",
+	"CLINE_QB_SESSION_DATA_DIR",
+	"CLINE_QB_PROVIDER_SETTINGS_PATH",
+	"CLINE_QB_GLOBAL_SETTINGS_PATH",
+	"CLINE_QB_MCP_SETTINGS_PATH",
 ] as const;
 
 async function withDashboardEnvironment<T>(
@@ -69,7 +67,7 @@ async function withDashboardEnvironment<T>(
 	const cwd = options.cwd ? resolve(options.cwd) : process.cwd();
 	const restore = [
 		setEnvValue("WORKSPACE_ROOT", options.cwd ? cwd : undefined),
-		setEnvValue("CLINE_DIR", options.configDir?.trim() || undefined),
+		setEnvValue("CLINE_QB_DIR", options.configDir?.trim() || undefined),
 		setEnvValue("HOST", options.host),
 		setEnvValue(DASHBOARD_PORT_ENV, options.port),
 		setEnvValue("PUBLIC_URL", options.publicUrl),
@@ -77,14 +75,14 @@ async function withDashboardEnvironment<T>(
 		setEnvValue(WEBVIEW_DIST_ENV, resolveDefaultWebviewDistDir()),
 		...SANDBOX_ENV_KEYS.map((key) => setEnvValue(key, undefined)),
 	];
-	if (options.dataDir || process.env.CLINE_SANDBOX?.trim() === "1") {
-		configureSandboxEnvironment({
-			enabled: true,
-			cwd,
-			explicitDir: options.dataDir,
-		});
-	}
 	try {
+		if (options.dataDir || process.env.CLINE_QB_SANDBOX?.trim() === "1") {
+			configureSandboxEnvironment({
+				enabled: true,
+				cwd,
+				explicitDir: options.dataDir,
+			});
+		}
 		return await fn();
 	} finally {
 		for (let i = restore.length - 1; i >= 0; i--) {
@@ -115,8 +113,8 @@ function resolveDefaultWebviewDistDir(): string | undefined {
 function resolveInstalledPlatformPackageWebviewCandidates(): string[] {
 	const packageName = resolvePlatformPackageName();
 	const starts = [
-		process.env.CLINE_WRAPPER_PATH
-			? dirname(process.env.CLINE_WRAPPER_PATH)
+		process.argv[1] && isAbsolute(process.argv[1])
+			? dirname(process.argv[1])
 			: undefined,
 		dirname(process.execPath),
 	].filter((value): value is string => !!value?.trim());
@@ -137,7 +135,7 @@ function resolveInstalledPlatformPackageWebviewCandidates(): string[] {
 
 function resolvePlatformPackageName(): string {
 	const platformName = platform() === "win32" ? "windows" : platform();
-	return `@cline/cli-${platformName}-${arch()}`;
+	return `cline-qb-${platformName}-${arch()}`;
 }
 
 async function startDefaultDashboardServer(): Promise<DashboardServerHandle> {
@@ -185,29 +183,32 @@ export async function runDashboardCommand(
 	options: RunDashboardCommandOptions,
 ): Promise<number> {
 	try {
-		const server = await withDashboardEnvironment(options, () =>
-			(options.startServer ?? startDefaultDashboardServer)(),
-		);
-		const dashboardUrl =
-			server.inviteUrl || server.publicUrl || server.listenUrl;
-		options.io.writeln(
-			`${c.green}Cline dashboard listening at${c.reset} ${dashboardUrl}`,
-		);
-		if (server.hubUrl) {
-			options.io.writeln(`${c.dim}Hub endpoint: ${server.hubUrl}${c.reset}`);
-		}
-
-		if (options.openBrowser !== false) {
-			try {
-				await (options.openUrl ?? openDefaultUrl)(dashboardUrl);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				options.io.writeErr(`Failed to open browser: ${message}`);
+		return await withDashboardEnvironment(options, async () => {
+			const server = await (
+				options.startServer ?? startDefaultDashboardServer
+			)();
+			const dashboardUrl =
+				server.inviteUrl || server.publicUrl || server.listenUrl;
+			options.io.writeln(
+				`${c.green}Cline dashboard listening at${c.reset} ${dashboardUrl}`,
+			);
+			if (server.hubUrl) {
+				options.io.writeln(`${c.dim}Hub endpoint: ${server.hubUrl}${c.reset}`);
 			}
-		}
 
-		await (options.waitForShutdown ?? waitForProcessShutdown)(server);
-		return 0;
+			if (options.openBrowser !== false) {
+				try {
+					await (options.openUrl ?? openDefaultUrl)(dashboardUrl);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					options.io.writeErr(`Failed to open browser: ${message}`);
+				}
+			}
+
+			await (options.waitForShutdown ?? waitForProcessShutdown)(server);
+			return 0;
+		});
 	} catch (error) {
 		options.io.writeErr(error instanceof Error ? error.message : String(error));
 		return 1;

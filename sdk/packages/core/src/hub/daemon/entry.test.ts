@@ -119,6 +119,16 @@ vi.mock("./bind-diagnostics", () => ({
 	describeAddressInUse: mockDescribeAddressInUse,
 }));
 
+const mockGetHubDaemonRuntime = vi.hoisted(() =>
+	vi.fn(
+		(): { sessionHost: unknown; peerIdentity: unknown } | undefined =>
+			undefined,
+	),
+);
+vi.mock("./runtime-registration", () => ({
+	getHubDaemonRuntime: mockGetHubDaemonRuntime,
+}));
+
 const originalArgv = [...process.argv];
 const originalCwd = process.cwd();
 
@@ -142,6 +152,8 @@ describe("hub daemon entry", () => {
 		vi.restoreAllMocks();
 		vi.resetModules();
 		mockCreateLocalHubScheduleRuntimeHandlers.mockClear();
+		mockGetHubDaemonRuntime.mockReset();
+		mockDescribeAddressInUse.mockClear();
 		mockInitVcr.mockClear();
 		mockResolveHubEndpointOptions.mockClear();
 		mockResolveProductionHubOwnerContext.mockClear();
@@ -191,6 +203,60 @@ describe("hub daemon entry", () => {
 			telemetry: mockDaemonTelemetryService,
 		});
 		expect(mockReconnectDaemonConnectors).toHaveBeenCalledOnce();
+	});
+
+	it("AC013 daemon passes the registered host to both interactive and scheduled sessions", async () => {
+		process.argv = ["node", "entry.js", "--no-connectors"];
+		vi.spyOn(process, "on").mockImplementation(() => process);
+		const sessionHost = { owned: true };
+		const peerIdentity = {
+			applicationId: "cline-qb",
+			policyDigest: "a".repeat(64),
+		};
+		mockGetHubDaemonRuntime.mockReturnValue({ sessionHost, peerIdentity });
+		const { hubDaemonReady } = await import("./entry");
+		await hubDaemonReady;
+		expect(mockStartHubWebSocketServer).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionHost, peerIdentity }),
+		);
+		expect(mockCreateLocalHubScheduleRuntimeHandlers).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionHost }),
+		);
+	});
+
+	it("AC002 missing governed bootstrap blocks before any default scheduled runtime or listener", async () => {
+		process.argv = ["node", "entry.js", "--no-connectors"];
+		vi.spyOn(process, "on").mockImplementation(() => process);
+		vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+		mockGetHubDaemonRuntime.mockImplementation(() => {
+			throw new Error("Governed daemon runtime is not registered");
+		});
+		const { hubDaemonReady } = await import("./entry");
+		await expect(hubDaemonReady).rejects.toThrow(
+			"Governed daemon runtime is not registered",
+		);
+		expect(mockCreateLocalHubScheduleRuntimeHandlers).not.toHaveBeenCalled();
+		expect(mockStartHubWebSocketServer).not.toHaveBeenCalled();
+	});
+
+	it("AC015 failed bind never retries a supplied runtime disposed by server rollback", async () => {
+		process.argv = ["node", "entry.js", "--no-connectors"];
+		vi.spyOn(process, "on").mockImplementation(() => process);
+		vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+		mockGetHubDaemonRuntime.mockReturnValue({
+			sessionHost: { owned: true },
+			peerIdentity: { applicationId: "cline-qb", policyDigest: "a".repeat(64) },
+		});
+		mockStartHubWebSocketServer.mockRejectedValueOnce(
+			Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
+		);
+		const { hubDaemonReady } = await import("./entry");
+		await expect(hubDaemonReady).rejects.toThrow("EADDRINUSE");
+		expect(mockStartHubWebSocketServer).toHaveBeenCalledOnce();
+		expect(mockDescribeAddressInUse).toHaveBeenCalledOnce();
+		expect(mockReconnectDaemonConnectors).not.toHaveBeenCalled();
 	});
 
 	it("leaves account connectors untouched when connector management is disabled", async () => {

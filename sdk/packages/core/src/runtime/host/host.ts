@@ -108,6 +108,7 @@ function createLocalRuntimeHost(
 		logger: options.logger,
 		telemetry: options.telemetry,
 		toolPolicies: options.toolPolicies,
+		configureAgentRuntime: options.configureAgentRuntime,
 		distinctId,
 		fetch: options.fetch,
 	});
@@ -140,6 +141,10 @@ export async function createRuntimeHost(
 	const distinctId = resolveCoreDistinctId(options.distinctId);
 	options.telemetry?.setDistinctId(distinctId);
 	const configuredMode = resolveConfiguredBackendMode(options);
+	if (options.configureAgentRuntime && configuredMode !== "local")
+		throw new Error(
+			"Host runtime configuration requires local execution; install policy on the remote host separately.",
+		);
 	if (configuredMode === "remote") {
 		const remoteEndpoint = options.remote?.endpoint?.trim();
 		if (!remoteEndpoint) {

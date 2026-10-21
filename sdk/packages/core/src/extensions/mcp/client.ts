@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 import {
 	type AgentToolContext,
+	assertUserConfiguredMcp,
 	formatMcpTimeoutErrorMessage,
 	isMcpTimeoutConfigured,
 } from "@cline/shared";
@@ -921,10 +922,12 @@ class SdkUrlMcpClient implements McpServerClient {
 export function createDefaultMcpServerClientFactory(
 	options: DefaultMcpServerClientFactoryOptions = {},
 ): McpServerClientFactory {
-	return (registration) =>
-		registration.transport.type === "stdio"
+	return (registration) => {
+		assertUserConfiguredMcp(registration);
+		return registration.transport.type === "stdio"
 			? new StdioMcpClient(registration)
 			: new SdkUrlMcpClient(registration, options);
+	};
 }
 
 /**

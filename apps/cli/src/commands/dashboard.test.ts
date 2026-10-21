@@ -6,28 +6,28 @@ import { runDashboardCommand, waitForProcessShutdown } from "./dashboard";
 
 const ENV_KEYS = [
 	"WORKSPACE_ROOT",
-	"CLINE_DIR",
-	"CLINE_SANDBOX",
-	"CLINE_SANDBOX_DATA_DIR",
-	"CLINE_DATA_DIR",
-	"CLINE_DB_DATA_DIR",
-	"CLINE_SESSION_DATA_DIR",
-	"CLINE_TEAM_DATA_DIR",
-	"CLINE_PROVIDER_SETTINGS_PATH",
-	"CLINE_HOOKS_LOG_PATH",
+	"CLINE_QB_DIR",
+	"CLINE_QB_SANDBOX",
+	"CLINE_QB_DATA_DIR",
+	"CLINE_QB_SESSION_DATA_DIR",
+	"CLINE_QB_PROVIDER_SETTINGS_PATH",
+	"CLINE_QB_GLOBAL_SETTINGS_PATH",
+	"CLINE_QB_MCP_SETTINGS_PATH",
 	"HOST",
-	"CLINE_HUB_DASHBOARD_PORT",
+	"CLINE_QB_HUB_DASHBOARD_PORT",
 	"PUBLIC_URL",
 	"ROOM_SECRET",
-	"CLINE_HUB_WEBVIEW_DIST_DIR",
+	"CLINE_QB_HUB_WEBVIEW_DIST_DIR",
 	"CLINE_WRAPPER_PATH",
 ] as const;
 
+const originalEntryArg = process.argv[1];
 const originalEnv = Object.fromEntries(
 	ENV_KEYS.map((key) => [key, process.env[key]]),
 );
 
 afterEach(() => {
+	process.argv[1] = originalEntryArg;
 	for (const key of ENV_KEYS) {
 		const value = originalEnv[key];
 		if (value === undefined) {
@@ -59,7 +59,7 @@ describe("runDashboardCommand", () => {
 			| undefined;
 		const webviewDistDir = mkdtempSync(join(tmpdir(), "cline-webview-dist-"));
 		mkdirSync(webviewDistDir, { recursive: true });
-		process.env.CLINE_HUB_WEBVIEW_DIST_DIR = webviewDistDir;
+		process.env.CLINE_QB_HUB_WEBVIEW_DIST_DIR = webviewDistDir;
 
 		const exitCode = await runDashboardCommand({
 			configDir: "/tmp/cline-config",
@@ -76,14 +76,14 @@ describe("runDashboardCommand", () => {
 			startServer: async () => {
 				observedEnv = {
 					workspaceRoot: process.env.WORKSPACE_ROOT,
-					clineDir: process.env.CLINE_DIR,
-					clineDataDir: process.env.CLINE_DATA_DIR,
-					providerSettingsPath: process.env.CLINE_PROVIDER_SETTINGS_PATH,
+					clineDir: process.env.CLINE_QB_DIR,
+					clineDataDir: process.env.CLINE_QB_DATA_DIR,
+					providerSettingsPath: process.env.CLINE_QB_PROVIDER_SETTINGS_PATH,
 					host: process.env.HOST,
-					port: process.env.CLINE_HUB_DASHBOARD_PORT,
+					port: process.env.CLINE_QB_HUB_DASHBOARD_PORT,
 					publicUrl: process.env.PUBLIC_URL,
 					roomSecret: process.env.ROOM_SECRET,
-					webviewDistDir: process.env.CLINE_HUB_WEBVIEW_DIST_DIR,
+					webviewDistDir: process.env.CLINE_QB_HUB_WEBVIEW_DIST_DIR,
 				};
 				return {
 					listenUrl: "http://127.0.0.1:9090/",
@@ -97,6 +97,10 @@ describe("runDashboardCommand", () => {
 				opened.push(url);
 			},
 			waitForShutdown: async (server) => {
+				expect(process.env.CLINE_QB_DATA_DIR).toBe(
+					resolve("sdk", ".cline-dashboard-data"),
+				);
+				expect(process.env.CLINE_QB_DIR).toBe("/tmp/cline-config");
 				await server.stop();
 			},
 		});
@@ -123,7 +127,9 @@ describe("runDashboardCommand", () => {
 		expect(output.join("\n")).toContain("ws://127.0.0.1:25463/hub");
 		expect(errors).toEqual([]);
 		expect(process.env.WORKSPACE_ROOT).toBe(originalEnv.WORKSPACE_ROOT);
-		expect(process.env.CLINE_HUB_WEBVIEW_DIST_DIR).toBe(webviewDistDir);
+		expect(process.env.CLINE_QB_DATA_DIR).toBe(originalEnv.CLINE_QB_DATA_DIR);
+		expect(process.env.CLINE_QB_DIR).toBe(originalEnv.CLINE_QB_DIR);
+		expect(process.env.CLINE_QB_HUB_WEBVIEW_DIST_DIR).toBe(webviewDistDir);
 	});
 
 	it("honors --no-open behavior", async () => {
@@ -149,24 +155,30 @@ describe("runDashboardCommand", () => {
 		expect(openUrl).not.toHaveBeenCalled();
 	});
 
-	it("finds webview assets from the published wrapper package layout", async () => {
+	it("finds private webview assets relative to the absolute entrypoint and ignores the upstream wrapper hint", async () => {
 		const root = mkdtempSync(join(tmpdir(), "cline-wrapper-layout-"));
-		const wrapperPath = join(root, "node_modules", "cline", "bin", "cline");
+		const wrapperPath = join(
+			root,
+			"node_modules",
+			"cline-qb",
+			"bin",
+			"cline-qb",
+		);
 		const platformName = platform() === "win32" ? "windows" : platform();
 		const webviewDistDir = join(
 			root,
 			"node_modules",
-			"cline",
+			"cline-qb",
 			"node_modules",
-			"@cline",
-			`cli-${platformName}-${arch()}`,
+			`cline-qb-${platformName}-${arch()}`,
 			"cline-hub",
 			"webview",
 		);
 		mkdirSync(join(wrapperPath, ".."), { recursive: true });
 		mkdirSync(webviewDistDir, { recursive: true });
-		process.env.CLINE_WRAPPER_PATH = wrapperPath;
-		delete process.env.CLINE_HUB_WEBVIEW_DIST_DIR;
+		process.env.CLINE_WRAPPER_PATH = join(root, "upstream", "cline");
+		process.argv[1] = wrapperPath;
+		delete process.env.CLINE_QB_HUB_WEBVIEW_DIST_DIR;
 		let observedWebviewDistDir: string | undefined;
 
 		const exitCode = await runDashboardCommand({
@@ -176,7 +188,7 @@ describe("runDashboardCommand", () => {
 				writeErr: () => {},
 			},
 			startServer: async () => {
-				observedWebviewDistDir = process.env.CLINE_HUB_WEBVIEW_DIST_DIR;
+				observedWebviewDistDir = process.env.CLINE_QB_HUB_WEBVIEW_DIST_DIR;
 				return {
 					listenUrl: "http://127.0.0.1:8787/",
 					publicUrl: "http://127.0.0.1:8787",
@@ -205,4 +217,87 @@ describe("runDashboardCommand", () => {
 
 		await expect(shutdown).rejects.toThrow("stop failed");
 	});
+});
+
+describe("private dashboard storage cleanup", () => {
+	it.each([
+		"start",
+		"shutdown",
+	])("restores private configuration after %s failure", async (stage) => {
+		const before = Object.fromEntries(
+			ENV_KEYS.map((key) => [key, process.env[key]]),
+		);
+		const errors: string[] = [];
+		const exitCode = await runDashboardCommand({
+			configDir: "/tmp/qb-dashboard-config",
+			dataDir: "/tmp/qb-dashboard-state",
+			openBrowser: false,
+			io: { writeln: () => {}, writeErr: (text) => errors.push(text) },
+			startServer: async () => {
+				expect(process.env.CLINE_QB_DATA_DIR).toBe("/tmp/qb-dashboard-state");
+				if (stage === "start") throw new Error("fixture startup failure");
+				return {
+					listenUrl: "http://127.0.0.1:8797",
+					publicUrl: "http://127.0.0.1:8797",
+					inviteUrl: "http://127.0.0.1:8797",
+					stop: () => {},
+				};
+			},
+			waitForShutdown: async () => {
+				expect(process.env.CLINE_QB_DATA_DIR).toBe("/tmp/qb-dashboard-state");
+				throw new Error("fixture shutdown failure");
+			},
+		});
+		expect(exitCode).toBe(1);
+		expect(errors).toEqual([
+			stage === "start"
+				? "fixture startup failure"
+				: "fixture shutdown failure",
+		]);
+		expect(
+			Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])),
+		).toEqual(before);
+	});
+});
+
+it("preserves inherited private settings throughout dashboard lifetime when flags are absent", async () => {
+	const inherited = {
+		CLINE_QB_DIR: "/tmp/private-root",
+		CLINE_QB_DATA_DIR: "/tmp/private-data",
+		CLINE_QB_SESSION_DATA_DIR: "/tmp/private-sessions",
+		CLINE_QB_PROVIDER_SETTINGS_PATH: "/tmp/private-providers.json",
+		CLINE_QB_GLOBAL_SETTINGS_PATH: "/tmp/private-settings.json",
+		CLINE_QB_MCP_SETTINGS_PATH: "/tmp/private-mcp.json",
+		HOST: "127.0.0.1",
+		CLINE_QB_HUB_DASHBOARD_PORT: "9191",
+		PUBLIC_URL: "http://127.0.0.1:9191",
+		ROOM_SECRET: "fixture-only",
+		WORKSPACE_ROOT: "/tmp/private-workspace",
+	};
+	Object.assign(process.env, inherited);
+	delete process.env.CLINE_QB_SANDBOX;
+	const check = () => {
+		for (const [key, value] of Object.entries(inherited))
+			expect(process.env[key], key).toBe(value);
+	};
+	const errors: string[] = [];
+	const status = await runDashboardCommand({
+		openBrowser: false,
+		io: { writeln: () => {}, writeErr: (error) => errors.push(error) },
+		startServer: async () => {
+			check();
+			return {
+				listenUrl: inherited.PUBLIC_URL,
+				publicUrl: inherited.PUBLIC_URL,
+				inviteUrl: inherited.PUBLIC_URL,
+				stop: () => {},
+			};
+		},
+		waitForShutdown: async () => {
+			check();
+		},
+	});
+	expect(errors).toEqual([]);
+	expect(status).toBe(0);
+	check();
 });

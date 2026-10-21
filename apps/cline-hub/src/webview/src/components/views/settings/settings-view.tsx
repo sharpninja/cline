@@ -43,10 +43,6 @@ const navCategories = [
 ] as const;
 
 export type SettingsSection = (typeof navCategories)[number];
-type GlobalSettingsResponse = {
-	telemetryOptOut: boolean;
-	autoUpdateEnabled: boolean;
-};
 
 const PROVIDER_CATALOG_CACHE_TTL_MS = 60_000;
 
@@ -530,105 +526,23 @@ export function SettingsView({
 }
 
 function GeneralSettingsContent() {
-	const [theme, setTheme] = useState<HubTheme>(() => {
-		if (typeof window === "undefined") return "light";
-		return readStoredHubTheme() ?? readSystemHubTheme();
-	});
-	const [telemetryOptOut, setTelemetryOptOut] = useState(false);
-	const [telemetryLoading, setTelemetryLoading] = useState(true);
-	const [telemetrySaving, setTelemetrySaving] = useState(false);
-	const [telemetryError, setTelemetryError] = useState<string | null>(null);
-	const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
-	const [autoUpdateLoading, setAutoUpdateLoading] = useState(true);
-	const [autoUpdateSaving, setAutoUpdateSaving] = useState(false);
-	const [autoUpdateError, setAutoUpdateError] = useState<string | null>(null);
-
-	const loadGlobalSettings = useCallback(async () => {
-		setTelemetryLoading(true);
-		setTelemetryError(null);
-		setAutoUpdateLoading(true);
-		setAutoUpdateError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"get_global_settings",
-			);
-			setTelemetryOptOut(settings.telemetryOptOut);
-			setAutoUpdateEnabled(settings.autoUpdateEnabled);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setTelemetryError(message);
-			setAutoUpdateError(message);
-		} finally {
-			setTelemetryLoading(false);
-			setAutoUpdateLoading(false);
-		}
-	}, []);
-
-	useEffect(() => {
-		const timeoutId = window.setTimeout(() => {
-			void loadGlobalSettings();
-		}, 0);
-		return () => window.clearTimeout(timeoutId);
-	}, [loadGlobalSettings]);
-
-	const updateTelemetryOptOut = async (nextValue: boolean) => {
-		const previousValue = telemetryOptOut;
-		setTelemetryOptOut(nextValue);
-		setTelemetrySaving(true);
-		setTelemetryError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"set_telemetry_opt_out",
-				{
-					telemetry_opt_out: nextValue,
-				},
-			);
-			setTelemetryOptOut(settings.telemetryOptOut);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setTelemetryOptOut(previousValue);
-			setTelemetryError(message);
-		} finally {
-			setTelemetrySaving(false);
-		}
-	};
-
-	const updateAutoUpdateEnabled = async (nextValue: boolean) => {
-		const previousValue = autoUpdateEnabled;
-		setAutoUpdateEnabled(nextValue);
-		setAutoUpdateSaving(true);
-		setAutoUpdateError(null);
-		try {
-			const settings = await desktopClient.invoke<GlobalSettingsResponse>(
-				"set_auto_update_enabled",
-				{
-					auto_update_enabled: nextValue,
-				},
-			);
-			setAutoUpdateEnabled(settings.autoUpdateEnabled);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			setAutoUpdateEnabled(previousValue);
-			setAutoUpdateError(message);
-		} finally {
-			setAutoUpdateSaving(false);
-		}
-	};
-
+	const [theme, setTheme] = useState<HubTheme>(() =>
+		typeof window === "undefined"
+			? "light"
+			: (readStoredHubTheme() ?? readSystemHubTheme()),
+	);
 	const updateTheme = (darkModeEnabled: boolean) => {
-		const nextTheme = darkModeEnabled ? "dark" : "light";
-		setTheme(setStoredHubTheme(nextTheme));
+		setTheme(setStoredHubTheme(darkModeEnabled ? "dark" : "light"));
 		window.dispatchEvent(new Event("cline-hub-theme-change"));
 	};
-
 	return (
 		<PageFrame>
 			<PageHeader
-				description="Manage Hub preferences for this browser and CLI environment."
 				title="Settings"
+				description="Manage preferences for this browser."
 			/>
 			<section className="max-w-[86rem]">
-				<div className="flex min-h-20 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
+				<div className="flex min-h-20 items-center justify-between gap-5 border-b">
 					<div>
 						<p className="text-[17px] font-semibold text-foreground">
 							Dark mode
@@ -643,48 +557,10 @@ function GeneralSettingsContent() {
 						onCheckedChange={updateTheme}
 					/>
 				</div>
-				<div className="flex min-h-20 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div>
-						<p className="text-[17px] font-semibold text-foreground">
-							Auto update
-						</p>
-						<p className="mt-1 text-[15px] text-muted-foreground">
-							Automatically install CLI updates on startup.
-						</p>
-						{autoUpdateError ? (
-							<p className="mt-2 text-xs text-destructive">
-								Failed to update auto update setting: {autoUpdateError}
-							</p>
-						) : null}
-					</div>
-					<Switch
-						aria-label="Auto update"
-						checked={autoUpdateEnabled}
-						disabled={autoUpdateLoading || autoUpdateSaving}
-						onCheckedChange={(checked) => void updateAutoUpdateEnabled(checked)}
-					/>
-				</div>
-				<div className="flex min-h-20 items-center justify-between gap-5 border-b max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:py-4">
-					<div>
-						<p className="text-[17px] font-semibold text-foreground">
-							Telemetry
-						</p>
-						<p className="mt-1 text-[15px] text-muted-foreground">
-							Enable error and usage report to help us improve Cline.
-						</p>
-						{telemetryError ? (
-							<p className="mt-2 text-xs text-destructive">
-								Failed to update telemetry setting: {telemetryError}
-							</p>
-						) : null}
-					</div>
-					<Switch
-						aria-label="Telemetry"
-						checked={!telemetryOptOut} // If opt-out is true, the switch should be off (unchecked)
-						disabled={telemetryLoading || telemetrySaving}
-						onCheckedChange={(checked) => void updateTelemetryOptOut(!checked)}
-					/>
-				</div>
+				<p className="py-4 text-sm text-muted-foreground">
+					Cline telemetry and upstream updates are unavailable in cline-qb.
+					Install a matching reviewed cline-qb build to update.
+				</p>
 			</section>
 		</PageFrame>
 	);

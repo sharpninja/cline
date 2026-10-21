@@ -81,6 +81,8 @@ export interface McpServerRegistration {
 	name: string;
 	transport: McpServerTransportConfig;
 	disabled?: boolean;
+	/** Provenance from Cline remote config; never connect these saved entries. */
+	remoteConfigured?: boolean;
 	/**
 	 * Per-server request timeout in seconds, from the `timeout` field in
 	 * cline_mcp_settings.json. Undefined means the shared default for ordinary

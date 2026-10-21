@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { type FSWatcher, watch } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { validateStoragePath } from "@cline/shared/storage";
 
 export interface UnifiedConfigFileContext<TType extends string = string> {
 	type: TType;
@@ -171,8 +172,13 @@ export class UnifiedConfigFileWatcher<
 			return;
 		}
 		this.started = true;
-		await this.refreshAll();
-		this.startDirectoryWatchers();
+		try {
+			await this.refreshAll();
+			this.startDirectoryWatchers();
+		} catch (error) {
+			this.stop();
+			throw error;
+		}
 	}
 
 	stop(): void {
@@ -270,7 +276,7 @@ export class UnifiedConfigFileWatcher<
 			}
 
 			try {
-				const watcher = watch(directoryPath, () => {
+				const watcher = watch(validateStoragePath(directoryPath), () => {
 					const types = this.watchedTypesByDirectory.get(directoryPath);
 					if (!types) {
 						return;
@@ -333,6 +339,9 @@ export class UnifiedConfigFileWatcher<
 					}
 					await this.refreshTypeInternal(definition);
 				}
+			}).catch((error) => {
+				this.stop();
+				for (const type of types) this.emit({ kind: "error", type, error });
 			});
 		}, this.debounceMs);
 	}
@@ -397,7 +406,8 @@ export class UnifiedConfigFileWatcher<
 		const records = new Map<string, InternalRecord<TType, TItem>>();
 		const discoveredDirectories = new Set<string>();
 
-		for (const directoryPath of definition.directories) {
+		for (const requestedDirectory of definition.directories) {
+			const directoryPath = validateStoragePath(requestedDirectory);
 			discoveredDirectories.add(directoryPath);
 			const fileCandidates = definition.discoverFiles
 				? await definition.discoverFiles(directoryPath)
@@ -406,15 +416,18 @@ export class UnifiedConfigFileWatcher<
 			for (const candidate of fileCandidates) {
 				const fileName = candidate.fileName;
 				const filePath = candidate.filePath;
-				discoveredDirectories.add(candidate.directoryPath);
+				discoveredDirectories.add(validateStoragePath(candidate.directoryPath));
 				if (
 					definition.includeFile &&
 					!definition.includeFile(fileName, filePath)
 				) {
 					continue;
 				}
+				// Policy failures are not optional parse errors. Check after includeFile,
+				// and again on every refresh before any content read.
+				const validatedFile = validateStoragePath(filePath);
 				try {
-					const content = await readFile(filePath, "utf8");
+					const content = await readFile(validatedFile, "utf8");
 					const context: UnifiedConfigFileContext<TType> = {
 						type: definition.type,
 						directoryPath: candidate.directoryPath,

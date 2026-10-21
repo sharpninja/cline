@@ -511,12 +511,13 @@ describe("hook payload validation and audit logging", () => {
 		expect(content).toContain('"agent_id":"agent_1"');
 	});
 
-	it("writes hook audits to CLINE_HOOKS_LOG_PATH when set", async () => {
+	it("ignores the upstream hook log override and writes to the resolved data root", async () => {
 		tempDir = mkdtempSync(path.join(os.tmpdir(), "cli-helper-env-audit-"));
-		const expectedPath = path.join(tempDir, "hooks", "from-env.jsonl");
+		const expectedPath = path.join(tempDir, "logs", "hooks.jsonl");
 		const env = captureEnv();
-		process.env.CLINE_HOOKS_LOG_PATH = expectedPath;
-		delete process.env.CLINE_DATA_DIR;
+		const ignoredPath = path.join(tempDir, "ignored-upstream.jsonl");
+		process.env.CLINE_HOOKS_LOG_PATH = ignoredPath;
+		process.env.CLINE_DATA_DIR = tempDir;
 		delete process.env.CLINE_SESSION_ID;
 		delete process.env.CLINE_SESSION_DATA_DIR;
 
@@ -542,6 +543,7 @@ describe("hook payload validation and audit logging", () => {
 		});
 		restoreEnv(env);
 
+		expect(existsSync(ignoredPath)).toBe(false);
 		expect(existsSync(expectedPath)).toBe(true);
 		const content = readFileSync(expectedPath, "utf8");
 		expect(content).toContain('"hookName":"tool_result"');
@@ -549,55 +551,48 @@ describe("hook payload validation and audit logging", () => {
 });
 
 describe("sandbox environment", () => {
-	it("sets sandbox-specific storage paths", () => {
+	it("sets only private sandbox storage paths and preserves upstream environment", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "cli-helper-sandbox-"));
-		const previous = {
-			CLINE_SANDBOX: process.env.CLINE_SANDBOX,
-			CLINE_SANDBOX_DATA_DIR: process.env.CLINE_SANDBOX_DATA_DIR,
-			CLINE_DATA_DIR: process.env.CLINE_DATA_DIR,
-			CLINE_DB_DATA_DIR: process.env.CLINE_DB_DATA_DIR,
-			CLINE_SESSION_DATA_DIR: process.env.CLINE_SESSION_DATA_DIR,
-			CLINE_TEAM_DATA_DIR: process.env.CLINE_TEAM_DATA_DIR,
-			CLINE_PROVIDER_SETTINGS_PATH: process.env.CLINE_PROVIDER_SETTINGS_PATH,
-			CLINE_HOOKS_LOG_PATH: process.env.CLINE_HOOKS_LOG_PATH,
-		};
+		const keys = [
+			"CLINE_QB_SANDBOX",
+			"CLINE_QB_DATA_DIR",
+			"CLINE_QB_SESSION_DATA_DIR",
+			"CLINE_QB_PROVIDER_SETTINGS_PATH",
+			"CLINE_QB_GLOBAL_SETTINGS_PATH",
+			"CLINE_QB_MCP_SETTINGS_PATH",
+		];
+		const previous = Object.fromEntries(
+			keys.map((key) => [key, process.env[key]]),
+		);
+		const upstream = process.env.CLINE_DATA_DIR;
 		try {
 			const resolved = configureSandboxEnvironment({
 				enabled: true,
 				cwd: root,
 				explicitDir: "./sandbox-state",
 			});
-			expect(resolved).toBe(path.join(root, "sandbox-state"));
-			expect(process.env.CLINE_SANDBOX).toBe("1");
-			expect(process.env.CLINE_SANDBOX_DATA_DIR).toBe(
-				path.join(root, "sandbox-state"),
+			const data = path.join(root, "sandbox-state");
+			expect(resolved).toBe(data);
+			expect(process.env.CLINE_QB_SANDBOX).toBe("1");
+			expect(process.env.CLINE_QB_DATA_DIR).toBe(data);
+			expect(process.env.CLINE_QB_SESSION_DATA_DIR).toBe(
+				path.join(data, "sessions"),
 			);
-			expect(process.env.CLINE_DATA_DIR).toBe(path.join(root, "sandbox-state"));
-			expect(process.env.CLINE_DB_DATA_DIR).toBe(
-				path.join(root, "sandbox-state", "db"),
+			expect(process.env.CLINE_QB_PROVIDER_SETTINGS_PATH).toBe(
+				path.join(data, "settings", "providers.json"),
 			);
-			expect(process.env.CLINE_SESSION_DATA_DIR).toBe(
-				path.join(root, "sandbox-state", "sessions"),
+			expect(process.env.CLINE_QB_GLOBAL_SETTINGS_PATH).toBe(
+				path.join(data, "settings", "global-settings.json"),
 			);
-			expect(process.env.CLINE_TEAM_DATA_DIR).toBe(
-				path.join(root, "sandbox-state", "teams"),
+			expect(process.env.CLINE_QB_MCP_SETTINGS_PATH).toBe(
+				path.join(data, "settings", "cline_mcp_settings.json"),
 			);
-			expect(process.env.CLINE_PROVIDER_SETTINGS_PATH).toBe(
-				path.join(root, "sandbox-state", "settings", "providers.json"),
-			);
-			expect(process.env.CLINE_HOOKS_LOG_PATH).toBe(
-				path.join(root, "sandbox-state", "logs", "hooks.jsonl"),
-			);
+			expect(process.env.CLINE_DATA_DIR).toBe(upstream);
 		} finally {
-			process.env.CLINE_SANDBOX = previous.CLINE_SANDBOX;
-			process.env.CLINE_SANDBOX_DATA_DIR = previous.CLINE_SANDBOX_DATA_DIR;
-			process.env.CLINE_DATA_DIR = previous.CLINE_DATA_DIR;
-			process.env.CLINE_DB_DATA_DIR = previous.CLINE_DB_DATA_DIR;
-			process.env.CLINE_SESSION_DATA_DIR = previous.CLINE_SESSION_DATA_DIR;
-			process.env.CLINE_TEAM_DATA_DIR = previous.CLINE_TEAM_DATA_DIR;
-			process.env.CLINE_PROVIDER_SETTINGS_PATH =
-				previous.CLINE_PROVIDER_SETTINGS_PATH;
-			process.env.CLINE_HOOKS_LOG_PATH = previous.CLINE_HOOKS_LOG_PATH;
+			for (const key of keys) {
+				if (previous[key] === undefined) delete process.env[key];
+				else process.env[key] = previous[key];
+			}
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

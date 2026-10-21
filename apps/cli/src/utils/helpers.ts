@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type HookEventPayload, parseHookEventPayload } from "@cline/shared";
-import { ensureHookLogDir } from "@cline/shared/storage";
+import { ensureHookLogDir, validateStoragePath } from "@cline/shared/storage";
 import { nanoid } from "nanoid";
 import { commanderToParsedArgs, createProgram } from "../commands/program";
 import type { ParsedArgs } from "./types";
@@ -482,8 +482,7 @@ export async function appendHookAudit(event: HookEventPayload): Promise<void> {
 		ts: new Date().toISOString(),
 		...event,
 	})}\n`;
-	const envPath = process.env.CLINE_HOOKS_LOG_PATH?.trim() || undefined;
-	const logPath = envPath ?? join(ensureHookLogDir(), "hooks.jsonl");
+	const logPath = validateStoragePath(join(ensureHookLogDir(), "hooks.jsonl"));
 	ensureHookLogDir(logPath);
 	appendFileSync(logPath, line, "utf-8");
 }
@@ -574,10 +573,10 @@ export function resolveSandboxDataDir(
 	cwd: string,
 	explicitDir?: string,
 ): string {
-	const envDir = process.env.CLINE_SANDBOX_DATA_DIR?.trim();
+	const envDir = process.env.CLINE_QB_DATA_DIR?.trim();
 	const baseDir =
-		explicitDir?.trim() || envDir || join(tmpdir(), "cline-sandbox");
-	return resolve(cwd, baseDir);
+		explicitDir?.trim() || envDir || join(tmpdir(), "cline-qb-sandbox");
+	return validateStoragePath(resolve(cwd, baseDir));
 }
 
 export function configureSandboxEnvironment(options: {
@@ -589,17 +588,23 @@ export function configureSandboxEnvironment(options: {
 		return undefined;
 	}
 	const dataDir = resolveSandboxDataDir(options.cwd, options.explicitDir);
-	process.env.CLINE_SANDBOX = "1";
-	process.env.CLINE_SANDBOX_DATA_DIR = dataDir;
-	process.env.CLINE_DATA_DIR = dataDir;
-	process.env.CLINE_DB_DATA_DIR = join(dataDir, "db");
-	process.env.CLINE_SESSION_DATA_DIR = join(dataDir, "sessions");
-	process.env.CLINE_TEAM_DATA_DIR = join(dataDir, "teams");
-	process.env.CLINE_PROVIDER_SETTINGS_PATH = join(
+	process.env.CLINE_QB_SANDBOX = "1";
+	process.env.CLINE_QB_DATA_DIR = dataDir;
+	process.env.CLINE_QB_SESSION_DATA_DIR = join(dataDir, "sessions");
+	process.env.CLINE_QB_PROVIDER_SETTINGS_PATH = join(
 		dataDir,
 		"settings",
 		"providers.json",
 	);
-	process.env.CLINE_HOOKS_LOG_PATH = join(dataDir, "logs", "hooks.jsonl");
+	process.env.CLINE_QB_GLOBAL_SETTINGS_PATH = join(
+		dataDir,
+		"settings",
+		"global-settings.json",
+	);
+	process.env.CLINE_QB_MCP_SETTINGS_PATH = join(
+		dataDir,
+		"settings",
+		"cline_mcp_settings.json",
+	);
 	return dataDir;
 }

@@ -15,6 +15,10 @@ import {
 } from "../commands/auth";
 import type { CliLoggerAdapter } from "../logging/adapter";
 import { resolveSystemPrompt } from "../runtime/prompt";
+import {
+	assertDirectProvider,
+	requireDirectProvider,
+} from "../utils/cloud-policy";
 import { resolveCliSessionMetadata } from "../utils/enterprise";
 import { resolveWorkspaceRoot } from "../utils/helpers";
 import {
@@ -60,15 +64,17 @@ export async function buildConnectorStartRequest(input: {
 	systemRules: string;
 	defaultModel?: string;
 }): Promise<ChatStartSessionRequest> {
+	const requestedProvider = input.options.provider?.trim();
+	if (requestedProvider) assertDirectProvider(requestedProvider);
 	const providerSettingsManager = new ProviderSettingsManager();
-	const lastUsedProviderSettings =
-		providerSettingsManager.getLastUsedProviderSettings({
-			isClinePassEnabled: true,
-		});
-	const provider = normalizeProviderId(
-		input.options.provider?.trim() ||
-			lastUsedProviderSettings?.provider ||
-			"cline",
+	const provider = requireDirectProvider(
+		normalizeProviderId(
+			requestedProvider ||
+				providerSettingsManager.getLastUsedProviderSettings({
+					isClinePassEnabled: true,
+				})?.provider ||
+				"",
+		),
 	);
 	let selectedProviderSettings =
 		providerSettingsManager.getProviderSettings(provider);

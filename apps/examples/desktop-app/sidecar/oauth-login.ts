@@ -1,13 +1,11 @@
+import { assertDirectProvider } from "@cline/qbrain-governance/cloud-policy";
 import type { ProviderSettingsManager } from "@cline/core";
 import {
-	completeClineDeviceAuth,
 	getProviderAuthStorageId,
 	loginLocalProvider,
 	markLocalProviderEnabled,
 	saveLocalProviderOAuthCredentials,
-	startClineDeviceAuth,
 } from "@cline/core";
-import { getClineEnvironmentConfig } from "@cline/shared";
 
 export class OAuthLoginCancelledError extends Error {
 	constructor(providerId: string) {
@@ -34,34 +32,16 @@ export type OAuthLoginDependencies = {
 	markEnabled: typeof markLocalProviderEnabled;
 };
 
-/**
- * Cline account providers sign in with the WorkOS device-code grant, whose
- * browser page asks the user to confirm a short code. `loginLocalProvider`
- * runs that flow but discards the code, so use the split helpers instead and
- * surface the code through `onUserCode` for the UI to display.
- */
+/** Direct-provider OAuth retains its provider-owned browser flow. */
 async function loginProviderForDesktop(
 	providerId: string,
 	existing: Parameters<typeof loginLocalProvider>[1],
 	openUrl: (url: string) => void,
-	onUserCode?: (userCode: string) => void,
+	_onUserCode?: (userCode: string) => void,
 ): ReturnType<typeof loginLocalProvider> {
-	if (providerId !== "cline" && providerId !== "cline-pass") {
-		return loginLocalProvider(providerId, existing, openUrl);
-	}
-	const device = await startClineDeviceAuth();
-	onUserCode?.(device.userCode);
-	openUrl(device.verificationUriComplete ?? device.verificationUri);
-	return completeClineDeviceAuth({
-		deviceCode: device.deviceCode,
-		expiresInSeconds: device.expiresInSeconds,
-		pollIntervalSeconds: device.pollIntervalSeconds,
-		apiBaseUrl:
-			existing?.baseUrl?.trim() || getClineEnvironmentConfig().apiBaseUrl,
-		provider: providerId,
-	});
+	assertDirectProvider(providerId);
+	return loginLocalProvider(providerId, existing, openUrl);
 }
-
 const defaultDependencies: OAuthLoginDependencies = {
 	login: loginProviderForDesktop,
 	save: saveLocalProviderOAuthCredentials,
@@ -85,7 +65,9 @@ export async function runCancellableProviderOAuthLogin(
 	} = {},
 	dependencies: OAuthLoginDependencies = defaultDependencies,
 ): Promise<{ provider: string; accessToken: string }> {
+	assertDirectProvider(providerId);
 	const storageProviderId = getProviderAuthStorageId(providerId) ?? providerId;
+	assertDirectProvider(storageProviderId);
 	const existing = manager.getProviderSettings(storageProviderId);
 
 	pendingOAuthLoginsByProvider.get(providerId)?.cancel();

@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 
-import { spawn } from "node:child_process"
 import path from "node:path"
+import { parseConcurrency, runPool } from "./run-bun-unit-tests"
 /**
- * Runner for the SDK-adapter + model-catalog `bun test` suites (the same set
- * `vitest.config.ts` covers; `test:vitest` runs them under vitest).
+ * Runner for the historical SDK-adapter + model-catalog `bun test` suites.
+ * This is a distinct runner from the broader `test:vitest` selection.
  *
  * Why a script instead of a bare `bun test <globs>`:
  *
  *  1. Curated include set. These suites are an explicit list (see
- *     INCLUDE_PATTERNS, kept in sync with `vitest.config.ts` `test.include`),
+ *     INCLUDE_PATTERNS),
  *     not the whole tree, so the node-side unit and @vscode/test-cli suites are
  *     not pulled in. `bun test`'s positional args don't expand `**` the way we
  *     need, so we resolve the globs ourselves with bun's `Glob`.
@@ -18,8 +18,8 @@ import path from "node:path"
  *     default, so `mock.module(...)` registrations leak between files — suites
  *     mocking the same specifier with different shapes (e.g.
  *     `@/core/storage/StateManager`, `@cline/core`) clobber each other.
- *     `--parallel` runs each file in its own worker process, giving each a fresh
- *     module registry.
+ *     Bun's --parallel reuses workers and their module mocks. The shared
+ *     bounded pool starts a separate Bun process for every file instead.
  *
  * Usage:
  *   bun scripts/run-bun-tests.ts            # run the curated set, isolated
@@ -27,7 +27,7 @@ import path from "node:path"
  */
 import { Glob } from "bun"
 
-// Mirror of vitest.config.ts `test.include`. Keep these in sync.
+// Preserve this runner's existing case selection independently of Vitest.
 const INCLUDE_PATTERNS = [
 	"src/sdk/**/*.test.ts",
 	"src/shared/vsCodeSelectorUtils.test.ts",
@@ -66,15 +66,17 @@ async function main(): Promise<void> {
 		return
 	}
 
-	const args = ["test", "--parallel", ...passthrough.filter((arg) => arg !== "--list"), ...files]
-	const child = spawn("bun", args, { cwd: projectRoot, stdio: "inherit" })
-	child.on("exit", (code, signal) => {
-		if (signal) {
-			process.kill(process.pid, signal)
-			return
-		}
-		process.exit(code ?? 1)
-	})
+	const testArgs: string[] = []
+	for (let index = 0; index < passthrough.length; index++) {
+		if (passthrough[index] === "-c" || passthrough[index] === "--concurrency") index++
+		else testArgs.push(passthrough[index])
+	}
+	const results = await runPool(files, parseConcurrency(passthrough), testArgs)
+	const pass = results.reduce((sum, result) => sum + result.pass, 0)
+	const fail = results.reduce((sum, result) => sum + result.fail, 0)
+	const errors = results.filter((result) => result.code !== 0 && result.fail === 0).length
+	console.log(`Files: ${results.length}   Pass: ${pass}   Fail: ${fail}   Errors: ${errors}`)
+	if (results.some((result) => result.code !== 0 || result.fail > 0)) process.exit(1)
 }
 
 void main()

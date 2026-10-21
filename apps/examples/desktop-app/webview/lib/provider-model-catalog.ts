@@ -1,6 +1,10 @@
 "use client";
 
-import type { CloudModel } from "@cline/core/cloud";
+import {
+	assertDirectProvider,
+	isClineCloudProvider,
+	rejectClineAccount,
+} from "@cline/qbrain-governance/cloud-policy";
 import {
 	isChatCompatibleModel,
 	isTranscriptionModel,
@@ -86,7 +90,7 @@ export function selectTranscriptionModel(
 	providers: Provider[],
 	selection: VoiceInputSelection | undefined,
 ): TranscriptionModelTarget | null {
-	if (!selection) return null;
+	if (!selection || isClineCloudProvider(selection.providerId)) return null;
 	const provider = providers.find(
 		(candidate) => candidate.enabled && candidate.id === selection.providerId,
 	);
@@ -110,6 +114,9 @@ export function buildProviderModelCatalog(
 	providers: Provider[],
 	voiceInput?: VoiceInputSelection,
 ): ProviderModelCatalog {
+	providers = providers.filter(
+		(provider) => !isClineCloudProvider(provider.id),
+	);
 	const providerEntries = providers.map((provider) => {
 		const chatModels = filterChatModels(provider.modelList);
 		return {
@@ -206,6 +213,7 @@ export function publishProviderModels(
 	providerId: string,
 	models: ProviderModel[],
 ): void {
+	if (isClineCloudProvider(providerId)) return;
 	invalidateProviderCatalogCache();
 	const chatModels = filterChatModels(models);
 	for (const listener of providerModelsListeners) {
@@ -233,7 +241,18 @@ export function fetchProviderCatalog(options?: {
 	}
 	const promise = desktopClient
 		.invoke<ProviderCatalogResponse>("list_provider_catalog")
-		.then((payload) => {
+		.then((rawPayload) => {
+			const payload = {
+				...rawPayload,
+				providers: rawPayload.providers.filter(
+					(provider) => !isClineCloudProvider(provider.id),
+				),
+				voiceInput:
+					rawPayload.voiceInput &&
+					!isClineCloudProvider(rawPayload.voiceInput.providerId)
+						? rawPayload.voiceInput
+						: undefined,
+			};
 			if (providerCatalogCache?.promise === promise)
 				providerCatalogPayload = payload;
 			return payload;
@@ -286,16 +305,34 @@ export type ProviderCatalogSnapshot = {
 	contextWindows: Record<string, Record<string, number>>;
 };
 
+function permittedSnapshot(
+	snapshot: ProviderCatalogSnapshot,
+): ProviderCatalogSnapshot {
+	return {
+		credentials: Object.fromEntries(
+			Object.entries(snapshot.credentials).filter(
+				([id]) => !isClineCloudProvider(id),
+			),
+		),
+		contextWindows: Object.fromEntries(
+			Object.entries(snapshot.contextWindows).filter(
+				([id]) => !isClineCloudProvider(id),
+			),
+		),
+	};
+}
 let providerCatalogSnapshot: ProviderCatalogSnapshot | null = null;
 
 export function readProviderCatalogSnapshot(): ProviderCatalogSnapshot | null {
-	return providerCatalogSnapshot;
+	return providerCatalogSnapshot
+		? permittedSnapshot(providerCatalogSnapshot)
+		: null;
 }
 
 export function writeProviderCatalogSnapshot(
 	snapshot: ProviderCatalogSnapshot,
 ): void {
-	providerCatalogSnapshot = snapshot;
+	providerCatalogSnapshot = permittedSnapshot(snapshot);
 }
 
 export function notifyVoiceInputSettingsChanged(settings?: {
@@ -305,7 +342,11 @@ export function notifyVoiceInputSettingsChanged(settings?: {
 		// A model selection does not change credentials or provider capabilities.
 		providerCatalogPayload = {
 			...providerCatalogPayload,
-			voiceInput: settings.voiceInput,
+			voiceInput:
+				settings.voiceInput &&
+				!isClineCloudProvider(settings.voiceInput.providerId)
+					? settings.voiceInput
+					: undefined,
 		};
 		providerCatalogCache = {
 			fetchedAt: Date.now(),
@@ -323,38 +364,7 @@ export async function loadProviderModelCatalog(options?: {
 	includeCloudModels?: boolean;
 	includeVoiceInput?: boolean;
 }): Promise<ProviderModelCatalog> {
-	if (options?.includeCloudModels) {
-		const [models, localCatalog] = await Promise.all([
-			desktopClient.invoke<CloudModel[]>("list_cloud_models"),
-			fetchProviderCatalog(),
-		]);
-		// This catalog reads bundled/local metadata, without provider network
-		// discovery. Load it explicitly so capabilities survive a cold cache.
-		const details = new Map(
-			(localCatalog.providers ?? []).flatMap((provider) =>
-				(provider.modelList ?? []).map((model) => [model.id, model] as const),
-			),
-		);
-		// Cloud catalogs are billing choices on the same Cline transport. Only
-		// the account-scoped cloud response determines which models are offered.
-		return buildProviderModelCatalog(
-			Object.entries({
-				cline: "Cline Usage-Billing",
-				"cline-pass": "ClinePass",
-				"cline-cloud": "ClineFree",
-			}).map(([id, name]) => ({
-				id,
-				name,
-				enabled: true,
-				models: null,
-				color: "",
-				letter: "C",
-				modelList: models
-					.filter((model) => model.catalogId === id)
-					.map((model) => ({ ...details.get(model.id), ...model })),
-			})),
-		);
-	}
+	if (options?.includeCloudModels) rejectClineAccount();
 	const payload = await fetchProviderCatalog();
 	const catalog = buildProviderModelCatalog(payload.providers ?? []);
 	// Voice discovery may need the provider network. Chat and routine pickers
@@ -374,9 +384,10 @@ export async function loadProviderModelCatalog(options?: {
 	return catalog;
 }
 
-export function loadTranscriptionModels(
+export async function loadTranscriptionModels(
 	providerId: string,
 ): Promise<ProviderModel[]> {
+	assertDirectProvider(providerId);
 	const cached = transcriptionModelsCache.get(providerId);
 	if (
 		cached &&
@@ -409,6 +420,8 @@ export async function loadProviderModels(
 	providerId: string,
 	options?: { includeCloudModels?: boolean },
 ): Promise<ProviderModel[]> {
+	assertDirectProvider(providerId);
+	if (options?.includeCloudModels) rejectClineAccount();
 	const payload = await desktopClient.invoke<ProviderModelsResponse>(
 		"list_provider_models",
 		{

@@ -531,6 +531,20 @@ export {
 	setStartingConnectorInstance,
 } from "./runtime/hub-daemon-env";
 export {
+	getHubDaemonLaunchSpec,
+	getHubNamespace,
+	type HubDaemonLaunchSpec,
+	type HubNamespace,
+	registerHubDaemonLaunchSpec,
+	registerHubNamespace,
+} from "./runtime/hub-namespace";
+export {
+	captureHubPeerIdentity,
+	getRequiredHubPeerIdentity,
+	type HubPeerIdentity,
+	registerHubPeerIdentity,
+} from "./runtime/hub-peer-identity";
+export {
 	ensureLoopbackProxyBypass,
 	LOOPBACK_NO_PROXY_HOSTS,
 } from "./runtime/loopback-proxy-bypass";

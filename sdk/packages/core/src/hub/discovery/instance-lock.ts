@@ -24,6 +24,7 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadSqliteDb, type SqliteDb } from "@cline/shared/db";
+import { validateStoragePath } from "@cline/shared/storage";
 
 /** Exit code for a daemon that lost the singleton race: diagnose, never replace. */
 export const HUB_LOCK_HELD_EXIT_CODE = 3;
@@ -48,7 +49,7 @@ export function isHubLockHeldError(error: unknown): error is HubLockHeldError {
 
 /** The lock file that guards one owner context (derived from its discovery path). */
 export function resolveHubInstanceLockPath(discoveryPath: string): string {
-	return `${discoveryPath}.instance.lock`;
+	return validateStoragePath(`${discoveryPath}.instance.lock`);
 }
 
 export class HubInstanceLock {
@@ -90,6 +91,7 @@ export class HubInstanceLock {
 	 * run queue already degrade rather than making SQLite a hard requirement.
 	 */
 	static acquire(lockFile: string): HubInstanceLock {
+		lockFile = validateStoragePath(lockFile);
 		let existed = false;
 		let db: SqliteDb;
 		try {

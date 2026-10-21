@@ -31,7 +31,7 @@ cd apps/cline-hub
 bun run start
 ```
 
-Open <http://127.0.0.1:8787> and click **Connect**. The server will discover or spawn a local detached hub on startup; the hub endpoint is printed in the console and shown in the sidebar.
+Open <http://127.0.0.1:8797> and click **Connect**. The server will discover or spawn a local detached hub on startup; the hub endpoint is printed in the console and shown in the sidebar.
 
 For webview development with Vite hot reload:
 
@@ -40,7 +40,7 @@ cd apps/cline-hub
 bun run dev
 ```
 
-This starts the Vite webview server on <http://127.0.0.1:5173> and the hub dashboard on <http://127.0.0.1:8787>. Open the dashboard URL; the served page loads webview modules from Vite, so changes under `src/webview/src` hot reload without rebuilding. Use `CLINE_HUB_WEBVIEW_DEV_PORT` or `CLINE_HUB_WEBVIEW_DEV_HOST` to change the Vite bind address.
+This starts the Vite webview server on <http://127.0.0.1:5173> and the hub dashboard on <http://127.0.0.1:8797>. Open the dashboard URL; the served page loads webview modules from Vite, so changes under `src/webview/src` hot reload without rebuilding. The development webview binds to `127.0.0.1:5173`.
 
 To start a brand-new session, the dashboard needs to know which provider and model to use. It picks them up automatically from the most recent session on the hub. If there are no recent sessions, set `CLINE_PROVIDER` and `CLINE_MODEL` in the environment before running.
 
@@ -51,7 +51,11 @@ Environment variables:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | Bind host for the dashboard. Use the default for same-machine development. Set `HOST=0.0.0.0` only when intentionally exposing the dashboard on a LAN/tunnel. |
-| `CLINE_HUB_DASHBOARD_PORT` | `8787` | Dashboard HTTP/WebSocket port. |
+| `CLINE_QB_HUB_DASHBOARD_PORT` | `8797` | Dashboard HTTP/WebSocket port. |
+| CLINE_QB_HUB_HOST | 127.0.0.1 | Local hub bind host. |
+| CLINE_QB_HUB_PORT | 25473 (production), 25476 (development) | Local hub port; occupied ports fail instead of falling back. |
+| CLINE_QB_HUB_DISCOVERY_PATH | private data root + locks/hub/production.json | Discovery record, subject to private storage validation. |
+| CLINE_QB_HUB_WEBVIEW_DIST_DIR | bundled assets | Validated dashboard asset directory override. |
 | `PUBLIC_URL` | `http://<HOST>:<PORT>` (`127.0.0.1` when binding `0.0.0.0`) | URL printed for humans to open/copy. Set this to your LAN URL or tunnel URL. |
 | `ROOM_SECRET` | unset | Shared invite secret required for browser WebSocket connections when `HOST` is non-local. |
 | `WORKSPACE_ROOT` | current directory | Workspace passed to the hub on startup. |
@@ -73,8 +77,8 @@ Choose a strong room secret and bind explicitly to all interfaces:
 ```bash
 cd apps/cline-hub
 HOST=0.0.0.0 \
-CLINE_HUB_DASHBOARD_PORT=8787 \
-PUBLIC_URL=http://YOUR_LAN_IP:8787 \
+CLINE_QB_HUB_DASHBOARD_PORT=8797 \
+PUBLIC_URL=http://YOUR_LAN_IP:8797 \
 ROOM_SECRET='use-a-long-random-secret' \
 bun run start
 ```
@@ -95,7 +99,7 @@ ROOM_SECRET='use-a-long-random-secret' bun run start
 In another terminal, expose the local port with your tunnel provider, for example:
 
 ```bash
-ngrok http 8787
+ngrok http 8797
 ```
 
 Restart the dashboard with the tunnel URL as `PUBLIC_URL` so the printed invite URL is copyable:
@@ -122,3 +126,9 @@ Sessions running on the previous hub are stopped along with the hub. Other clien
 ## Security warning
 
 This is an example dashboard, not a production admin tool. Exposing it on a LAN or tunnel lets anyone with the invite secret list clients/sessions on your hub, drive sessions, and restart the hub. Use a long random `ROOM_SECRET`, only share the URL with trusted participants, and stop the process when you are done. The hub and agent runtime remain owned by the host machine.
+
+## Private host startup
+
+This branch initializes private storage and hub namespaces before dashboard dependencies. Storage defaults to ~/.cline-qb; upstream CLINE_* storage and CLINE_HUB_* endpoint/discovery overrides are ignored. The hub WebSocket path is fixed at /hub. Source startup selects the checkout's absolute CLI entrypoint with the current Bun executable for detached children; a bundled dashboard uses its host's registered launch command.
+
+Namespace isolation is implemented here. Authenticated peer identity and policy-digest verification before attachment or retirement remain pending P1 work; namespace selection alone does not establish peer trust.

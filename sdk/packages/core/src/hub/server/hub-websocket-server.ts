@@ -3,6 +3,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import {
 	CURRENT_HUB_PROTOCOL_VERSION,
+	getHubNamespace,
 	HUB_CAPABILITIES,
 	MAX_CLIENT_HUB_PROTOCOL_VERSION,
 	MIN_CLIENT_HUB_PROTOCOL_VERSION,
@@ -26,7 +27,11 @@ import {
 	withHubStartupLock,
 	writeHubDiscovery,
 } from "../discovery";
-import { resolveDefaultHubPort } from "../discovery/defaults";
+import {
+	hasExplicitHubPort,
+	resolveDefaultHubPort,
+	resolveHubEndpointOptions,
+} from "../discovery/defaults";
 import {
 	HubInstanceLock,
 	isHubLockHeldError,
@@ -344,13 +349,26 @@ export function isLocalHubOrigin(
 	}
 }
 
+import {
+	captureHubServerPeerIdentity,
+	verifyHubPeerIdentity,
+} from "../peer-identity";
+
 export async function startHubWebSocketServer(
 	options: HubWebSocketServerOptions,
 ): Promise<HubWebSocketServer> {
+	const peerIdentity = captureHubServerPeerIdentity(
+		options.peerIdentity,
+		Boolean(options.sessionHost),
+	);
 	const owner = options.owner ?? resolveHubOwnerContext();
-	const host = options.host ?? "127.0.0.1";
-	const pathname = options.pathname ?? "/hub";
-	const configuredPort = options.port ?? resolveDefaultHubPort();
+	const endpoint = getHubNamespace()
+		? resolveHubEndpointOptions(options)
+		: undefined;
+	const host = endpoint?.host ?? options.host ?? "127.0.0.1";
+	const pathname = endpoint?.pathname ?? options.pathname ?? "/hub";
+	const configuredPort =
+		endpoint?.port ?? options.port ?? resolveDefaultHubPort();
 	const requestedPort = configuredPort;
 	let port = requestedPort;
 	let url = createHubServerUrl(host, requestedPort, pathname);
@@ -528,12 +546,15 @@ export async function startHubWebSocketServer(
 			const body = JSON.stringify({
 				hubId,
 				...versionPayload,
+				peerIdentity,
 				authToken,
 				host,
 				port,
 				url,
 				updatedAt: new Date().toISOString(),
-			} satisfies HubServerDiscoveryRecord);
+			} satisfies HubServerDiscoveryRecord & {
+				peerIdentity?: import("@cline/shared").HubPeerIdentity;
+			});
 			res.statusCode = 200;
 			res.setHeader("content-type", "application/json");
 			res.end(body);
@@ -838,10 +859,13 @@ export async function ensureHubWebSocketServer(
 		options.host !== undefined ||
 		options.port !== undefined ||
 		options.pathname !== undefined ||
-		!!process.env.CLINE_HUB_PORT?.trim();
-	const host = options.host ?? "127.0.0.1";
-	const port = options.port ?? resolveDefaultHubPort();
-	const pathname = options.pathname ?? "/hub";
+		hasExplicitHubPort();
+	const endpoint = getHubNamespace()
+		? resolveHubEndpointOptions(options)
+		: undefined;
+	const host = endpoint?.host ?? options.host ?? "127.0.0.1";
+	const port = endpoint?.port ?? options.port ?? resolveDefaultHubPort();
+	const pathname = endpoint?.pathname ?? options.pathname ?? "/hub";
 	const expectedUrl = createHubServerUrl(host, port, pathname);
 	const sharedKey = owner.discoveryPath;
 	const rememberIfManaged = <T extends EnsuredHubWebSocketServerResult>(
@@ -855,6 +879,7 @@ export async function ensureHubWebSocketServer(
 	const existing = SHARED_SERVERS.get(sharedKey);
 	if (existing) {
 		const server = await existing.promise;
+		await verifyHubPeerIdentity(server.url, server.authToken);
 		if (existing.state === "closing") {
 			// Runtime teardown alone does not release the HTTP endpoint. Keep the
 			// closing generation authoritative until its listener is also closed so
@@ -867,7 +892,7 @@ export async function ensureHubWebSocketServer(
 			}
 		} else if (
 			hubUrlMatchesEndpoint(server.url, host, port, pathname) ||
-			options.allowPortFallback === true
+			(!getHubNamespace() && options.allowPortFallback === true)
 		) {
 			return rememberIfManaged({
 				server,
@@ -899,7 +924,7 @@ export async function ensureHubWebSocketServer(
 			) {
 				if (
 					hubUrlMatchesEndpoint(discovered.url, host, port, pathname) ||
-					options.allowPortFallback === true
+					(!getHubNamespace() && options.allowPortFallback === true)
 				) {
 					return rememberIfManaged({
 						url: healthy.url,
@@ -995,7 +1020,11 @@ export async function ensureHubWebSocketServer(
 					);
 					continue;
 				}
-				if (!options.allowPortFallback || !isAddressInUseError(error)) {
+				if (
+					getHubNamespace() ||
+					!options.allowPortFallback ||
+					!isAddressInUseError(error)
+				) {
 					throw error;
 				}
 				return await start({ ...options, port: 0 });

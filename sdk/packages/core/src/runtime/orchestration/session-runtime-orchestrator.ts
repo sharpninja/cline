@@ -325,6 +325,10 @@ export type ConnectionOverrides = ConnectionUpdate;
  */
 export class SessionRuntime {
 	private config: AgentConfig;
+	private readonly configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
+	private readonly runtimeWorkspace: Readonly<
+		Pick<AgentConfig, "cwd" | "workspaceRoot">
+	>;
 	private readonly agentId: string;
 	private readonly parentAgentId?: string;
 	private readonly logger?: BasicLogger;
@@ -422,6 +426,11 @@ export class SessionRuntime {
 
 	constructor(config: AgentConfig, deps: SessionRuntimeOrchestratorDeps = {}) {
 		this.config = config;
+		this.configureAgentRuntime = config.configureAgentRuntime;
+		this.runtimeWorkspace = Object.freeze({
+			cwd: config.cwd,
+			workspaceRoot: config.workspaceRoot,
+		});
 		this.agentId = `agent_${randomUUID()}`;
 		this.parentAgentId = config.parentAgentId;
 		this.logger = deps.logger ?? config.logger;
@@ -810,6 +819,12 @@ export class SessionRuntime {
 			.finally(() => {
 				if (this.activeRunPromise === activePromise) {
 					this.activeRunPromise = null;
+					// Also release admission after failures before AgentRuntime exists.
+					this.activeRuntime = null;
+					this.running = false;
+					this.abortRequested = false;
+					this.abortReason = undefined;
+					this.activeRunId = null;
 				}
 			});
 		this.activeRunPromise = activePromise;
@@ -924,13 +939,9 @@ export class SessionRuntime {
 		const startedAt = new Date();
 		const effectiveUserMessage = input.userMessage;
 
-		// Append the user turn (if any) to the conversation store. This
-		// must happen BEFORE we snapshot `initialMessages` below so the
-		// runtime sees the user message as part of its seed — we then
-		// pass an empty input to `runtime.run()` so the runtime does not
-		// append the message a second time (AgentRuntime.execute treats
-		// a falsy input as "no additional messages", per
-		// packages/agents/src/agent-runtime.ts normalizeInput path).
+		// Persist the user turn before seeding history. Pass the actual prompt
+		// to runtime lifecycle hooks with appendInput: false, so hooks can
+		// attribute this invocation without duplicating its persisted message.
 		if (effectiveUserMessage !== undefined) {
 			const content = await buildUserTurnContent(
 				effectiveUserMessage,
@@ -1004,7 +1015,7 @@ export class SessionRuntime {
 				.filter((tool) => tool.resultPolicy === "cache-oversized")
 				.map((tool) => tool.name.toLowerCase()),
 		);
-		const runtimeConfig = createAgentRuntimeConfig({
+		let runtimeConfig = createAgentRuntimeConfig({
 			agentConfig: this.config,
 			sessionId: this.config.sessionId,
 			agentId: this.agentId,
@@ -1025,6 +1036,11 @@ export class SessionRuntime {
 			completionPolicy: toolCallingDisabled ? null : undefined,
 			systemPrompt,
 		});
+		if (this.configureAgentRuntime)
+			runtimeConfig = await this.configureAgentRuntime(
+				runtimeConfig,
+				this.runtimeWorkspace,
+			);
 		const runtime = this.createAgentRuntimeImpl(runtimeConfig);
 		this.activeRuntime = runtime;
 
@@ -1054,14 +1070,16 @@ export class SessionRuntime {
 		let runResult: AgentRunResult | undefined;
 		let thrownError: Error | undefined;
 		try {
-			// Pass empty input so AgentRuntime does not duplicate the
-			// user message we already seeded via `initialMessages`. The
-			// runtime's `normalizeInput` treats `""`/`undefined` as
-			// "no extra messages".
+			// History already contains this turn, but lifecycle hooks still
+			// need its actual input. Inputless continuation remains undefined.
 			if (input.isContinue) {
-				runResult = await runtime.continue(undefined);
+				runResult = await runtime.continue(effectiveUserMessage, {
+					appendInput: false,
+				});
 			} else {
-				runResult = await runtime.run("");
+				runResult = await runtime.run(effectiveUserMessage ?? "", {
+					appendInput: false,
+				});
 			}
 		} catch (error) {
 			thrownError = error instanceof Error ? error : new Error(String(error));
@@ -1622,6 +1640,7 @@ function deriveFinishReason(
 		case "aborted":
 			return "aborted";
 		case "failed":
+		case "blocked":
 			return "error";
 	}
 }

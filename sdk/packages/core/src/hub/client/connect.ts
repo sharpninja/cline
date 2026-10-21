@@ -52,6 +52,8 @@ function normalizeHubConnectionError(error: unknown, url: string): Error {
 	);
 }
 
+import { verifyHubPeerIdentity } from "../peer-identity";
+
 const HUB_AUTH_PROTOCOL_PREFIX = "cline-hub-auth.";
 
 function hasExplicitEndpoint(overrides: HubEndpointOverrides): boolean {
@@ -112,6 +114,7 @@ export async function connectToHub(url: string): Promise<HubConnection> {
 			const parsed = new URL(url);
 			const authToken = await resolveHubUrlAuthToken(parsed);
 			parsed.hash = "";
+			await verifyHubPeerIdentity(parsed.toString(), authToken);
 			const ws = new WebSocket(
 				parsed.toString(),
 				authToken ? [`${HUB_AUTH_PROTOCOL_PREFIX}${authToken}`] : undefined,

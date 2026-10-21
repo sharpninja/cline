@@ -129,7 +129,7 @@ describe("SDK remote-config coordination", () => {
 		expect(refresh).toHaveBeenCalledWith("signed-out:no-org", {})
 	})
 
-	it("refreshes remote config after login before posting authenticated state", async () => {
+	it("does not attach hosted policy refresh to auth callbacks", async () => {
 		const events: string[] = []
 		const controller = {
 			authService: { handleAuthCallback: vi.fn(async () => events.push("auth")) },
@@ -142,111 +142,75 @@ describe("SDK remote-config coordination", () => {
 
 		await SdkController.prototype.handleAuthCallback.call(controller as never, "token", "cline")
 
-		expect(events).toEqual(["auth", "refresh", "post"])
+		expect(events).toEqual(["auth", "post"])
 	})
 
-	it("rematerializes policy and ends the active session after a managed toggle", async () => {
-		const events: string[] = []
+	it("rejects a managed toggle without refreshing or ending local work", async () => {
 		const controller = {
-			refreshRemoteConfig: vi.fn(async () => {
-				events.push("refresh")
-				return true
-			}),
-			sessions: {
-				endActiveSession: vi.fn(async () => {
-					events.push("end")
-				}),
-			},
-			postStateToWebview: vi.fn(async () => events.push("post")),
+			refreshRemoteConfig: vi.fn().mockResolvedValue(true),
+			sessions: { endActiveSession: vi.fn() },
+			postStateToWebview: vi.fn(),
 		}
-
-		await SdkController.prototype.rematerializeRemoteConfig.call(controller as never)
-
-		expect(events).toEqual(["refresh", "end", "post"])
-		expect(controller.sessions.endActiveSession).toHaveBeenCalledWith("remoteConfigToggle", { awaitStop: true })
+		await expect(SdkController.prototype.rematerializeRemoteConfig.call(controller as never)).rejects.toMatchObject({
+			code: "cline_cloud_disabled",
+		})
+		expect(controller.refreshRemoteConfig).not.toHaveBeenCalled()
+		expect(controller.sessions.endActiveSession).not.toHaveBeenCalled()
+		expect(controller.postStateToWebview).not.toHaveBeenCalled()
 	})
 
-	it("allows the current organization to start with its last known-good policy after a transient failure", async () => {
+	it.each([null, "org-current", "org-new"])("ignores legacy organization %s when starting local work", async (org) => {
+		vi.mocked(telemetryService.captureRemoteConfigSessionGate).mockClear()
 		const controller = {
 			waitForInitialRemoteConfig: vi.fn().mockResolvedValue(undefined),
-			refreshRemoteConfig: vi.fn().mockResolvedValue(false),
-			authService: { getActiveOrganizationId: () => "org-current" },
+			refreshRemoteConfig: vi.fn().mockRejectedValue(new Error("hosted service unavailable")),
+			authService: { getActiveOrganizationId: vi.fn(() => org) },
+			stateManager: { getGlobalStateKey: vi.fn(() => "org-previous") },
 			remoteConfigBundle: { metadata: { organizationId: "org-current" } },
 		}
-
 		await expect(
 			SdkController.prototype["ensureRemoteConfigForSessionStart"].call(controller as never),
 		).resolves.toBeUndefined()
-		expect(telemetryService.captureRemoteConfigSessionGate).toHaveBeenCalledWith(
-			expect.objectContaining({ outcome: "last_known_good", managed: true }),
-		)
+		expect(controller.waitForInitialRemoteConfig).toHaveBeenCalledOnce()
+		expect(controller.refreshRemoteConfig).not.toHaveBeenCalled()
+		expect(controller.authService.getActiveOrganizationId).not.toHaveBeenCalled()
+		expect(controller.stateManager.getGlobalStateKey).not.toHaveBeenCalled()
+		expect(telemetryService.captureRemoteConfigSessionGate).not.toHaveBeenCalled()
 	})
 
-	it("does not block session start for users without an active organization when refresh fails", async () => {
-		const controller = {
-			waitForInitialRemoteConfig: vi.fn().mockResolvedValue(undefined),
-			refreshRemoteConfig: vi.fn().mockResolvedValue(false),
-			authService: { getActiveOrganizationId: () => null },
-			stateManager: { getGlobalStateKey: () => undefined },
-			remoteConfigBundle: undefined,
-		}
-
-		await expect(
-			SdkController.prototype["ensureRemoteConfigForSessionStart"].call(controller as never),
-		).resolves.toBeUndefined()
-		expect(telemetryService.captureRemoteConfigSessionGate).toHaveBeenCalledWith(
-			expect.objectContaining({ outcome: "unmanaged", managed: false }),
-		)
+	it("cannot publish a hosted integration or restore availability", async () => {
+		const controller = Object.create(SdkController.prototype)
+		controller.remoteConfigRevision = 0
+		const integration = { prepared: { bundle: { remoteConfig: {} } }, dispose: vi.fn().mockResolvedValue(undefined) }
+		await expect(controller.setRemoteConfigCoreIntegration(integration)).rejects.toMatchObject({
+			code: "cline_cloud_disabled",
+		})
+		controller.setRemoteConfigAvailable(true)
+		expect(controller.isRemoteConfigAvailable).toBe(false)
+		expect(controller.remoteConfig).toBeUndefined()
+		expect(controller.remoteConfigBundle).toBeUndefined()
+		expect(controller.currentRemoteConfigRevision).toBe(0)
+		expect(integration.dispose).toHaveBeenCalledOnce()
 	})
 
-	it("does not block unmanaged session start when the refresh rejects instead of returning false", async () => {
-		const controller = {
-			waitForInitialRemoteConfig: vi.fn().mockResolvedValue(undefined),
-			refreshRemoteConfig: vi.fn().mockRejectedValue(new Error("EACCES: permission denied")),
-			authService: { getActiveOrganizationId: () => null },
-			stateManager: { getGlobalStateKey: () => undefined },
-			remoteConfigBundle: undefined,
-		}
-
-		await expect(
-			SdkController.prototype["ensureRemoteConfigForSessionStart"].call(controller as never),
-		).resolves.toBeUndefined()
-		expect(telemetryService.captureRemoteConfigSessionGate).toHaveBeenCalledWith(
-			expect.objectContaining({ outcome: "unmanaged", managed: false }),
-		)
-	})
-
-	it("blocks session start when the install was managed but the identity cannot be resolved", async () => {
-		const controller = {
-			waitForInitialRemoteConfig: vi.fn().mockResolvedValue(undefined),
-			refreshRemoteConfig: vi.fn().mockResolvedValue(false),
-			authService: { getActiveOrganizationId: () => null },
-			stateManager: { getGlobalStateKey: () => "org-previous" },
-			remoteConfigBundle: undefined,
-		}
-
-		await expect(SdkController.prototype["ensureRemoteConfigForSessionStart"].call(controller as never)).rejects.toThrow(
-			"Could not verify organization policy",
-		)
-		expect(telemetryService.captureRemoteConfigSessionGate).toHaveBeenCalledWith(
-			expect.objectContaining({ outcome: "blocked", managed: true }),
-		)
-	})
-
-	it("blocks session start when current organization policy cannot be verified", async () => {
-		const controller = {
-			waitForInitialRemoteConfig: vi.fn().mockResolvedValue(undefined),
-			refreshRemoteConfig: vi.fn().mockResolvedValue(false),
-			authService: { getActiveOrganizationId: () => "org-new" },
-			remoteConfigBundle: { metadata: { organizationId: "org-old" } },
-		}
-
-		await expect(SdkController.prototype["ensureRemoteConfigForSessionStart"].call(controller as never)).rejects.toThrow(
-			"Could not verify organization policy",
-		)
-		expect(telemetryService.captureRemoteConfigSessionGate).toHaveBeenCalledWith(
-			expect.objectContaining({ outcome: "blocked", managed: true }),
-		)
+	it("awaits disposal of an old integration when clearing runtime policy", async () => {
+		const controller = Object.create(SdkController.prototype)
+		controller.remoteConfigRevision = 3
+		let release!: () => void
+		const disposed = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		controller.remoteConfigCoreIntegration = { dispose: vi.fn(() => disposed) }
+		let settled = false
+		const clearing = controller.setRemoteConfigCoreIntegration(undefined).then(() => {
+			settled = true
+		})
+		await Promise.resolve()
+		expect(controller.remoteConfigCoreIntegration).toBeUndefined()
+		expect(settled).toBe(false)
+		release()
+		await clearing
+		expect(controller.currentRemoteConfigRevision).toBe(4)
 	})
 
 	it("does not enter task startup until initial remote config is ready", async () => {

@@ -1,6 +1,7 @@
 import fsSync from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { getStorageNamespace, resolveClineDataDir, validateStoragePath } from "@cline/shared/storage"
 import { ClineFileStorage } from "./ClineFileStorage"
 import { ClineMemento } from "./ClineStorage"
 
@@ -91,6 +92,7 @@ function hashString(str: string): string {
  * show (ENG-2332).
  */
 export function resolveDataDirFromEnv(): string {
+	if (getStorageNamespace()) return validateStoragePath(resolveClineDataDir())
 	const envDataDir = process.env.CLINE_DATA_DIR?.trim()
 	if (envDataDir) {
 		return envDataDir
@@ -114,7 +116,7 @@ export function resolveDataDirFromEnv(): string {
  * @returns A StorageContext ready for use by StateManager
  */
 export function createStorageContext(opts: StorageContextOptions = {}): StorageContext {
-	const dataDir = opts.clineDir ? path.join(opts.clineDir, SETTINGS_SUBFOLDER) : resolveDataDirFromEnv()
+	const dataDir = validateStoragePath(opts.clineDir ? path.join(opts.clineDir, SETTINGS_SUBFOLDER) : resolveDataDirFromEnv())
 
 	// Resolve workspace storage directory
 	let workspaceDir: string
@@ -128,19 +130,25 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 		workspaceDir = path.join(dataDir, "workspaces", workspaceHash)
 	}
 
+	// Preflight every store before creating directories or reading any file.
+	workspaceDir = validateStoragePath(workspaceDir)
+	const globalStatePath = validateStoragePath(path.join(dataDir, "globalState.json"))
+	const secretsPath = validateStoragePath(path.join(dataDir, "secrets.json"))
+	const workspaceStatePath = validateStoragePath(path.join(workspaceDir, "workspaceState.json"))
+
 	// Ensure directories exist
 	fsSync.mkdirSync(dataDir, { recursive: true })
 	fsSync.mkdirSync(workspaceDir, { recursive: true })
 
-	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState")
+	const globalState = new ClineFileStorage(globalStatePath, "GlobalState")
 
 	return {
 		globalState,
 		globalStateBackingStore: globalState,
-		secrets: new ClineFileStorage<string>(path.join(dataDir, "secrets.json"), "Secrets", {
+		secrets: new ClineFileStorage<string>(secretsPath, "Secrets", {
 			fileMode: 0o600, // Owner read/write only — protects API keys
 		}),
-		workspaceState: new ClineFileStorage(path.join(workspaceDir, "workspaceState.json"), "WorkspaceState"),
+		workspaceState: new ClineFileStorage(workspaceStatePath, "WorkspaceState"),
 		dataDir,
 		workspaceStoragePath: workspaceDir,
 	}

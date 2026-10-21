@@ -238,6 +238,8 @@ export interface GatewayProviderContext {
 }
 
 export interface GatewayStreamRequest {
+	/** Enforced by the gateway and selected adapter, never encoded as provider options. */
+	toolExecutionPolicy?: "host-only";
 	providerId: string;
 	modelId: string;
 	systemPrompt?: string;
@@ -265,6 +267,8 @@ export interface GatewayStreamRequest {
 }
 
 export interface GatewayProvider {
+	/** True only when host-only requests cannot execute internal/provider tools. */
+	readonly enforcesHostToolExecution?: boolean;
 	stream(
 		request: GatewayStreamRequest,
 		context: GatewayProviderContext,

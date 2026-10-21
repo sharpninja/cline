@@ -8,6 +8,8 @@ import type {
 	AgentAfterToolResult,
 	AgentBeforeModelResult,
 	AgentBeforeToolResult,
+	AgentCompletionContext,
+	AgentCompletionDecision,
 	AgentMessage,
 	AgentMessagePart,
 	AgentModel,
@@ -23,6 +25,7 @@ import type {
 	AgentTool,
 	AgentToolCallPart,
 	AgentToolDefinition,
+	AgentToolExecutionDecision,
 	AgentToolResult,
 	AgentUsage,
 	AgentRuntimeConfig as BaseAgentRuntimeConfig,
@@ -50,6 +53,9 @@ import {
 	trimNonEmpty,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
+import { cloneModelRequestData } from "./model-request-data";
+
+class ModelRequestBlockedError extends Error {}
 
 /** A model request after turn preparation, ready to be issued (possibly more than once). */
 interface PreparedModelRequest {
@@ -142,6 +148,12 @@ function createUID(prefix: string, length = 8): string {
 }
 
 export type AgentRunInput = string | AgentMessage | readonly AgentMessage[];
+
+export interface AgentRunOptions {
+	/** Set false only when the host has already seeded this invocation's input in history. */
+	appendInput?: boolean;
+}
+
 export type AgentEventListener = (event: AgentRuntimeEvent) => void;
 
 /**
@@ -311,6 +323,30 @@ interface PreparedToolExecution {
 	tool?: AgentTool;
 	input: unknown;
 	skipReason?: string;
+	basePolicy?: ToolPolicy;
+	effectivePolicy?: ToolPolicy;
+}
+
+/** Gate contexts are plain data, immutable and detached from execution inputs. */
+function freezeGateData<T>(value: T): T {
+	if (value !== null && typeof value === "object") {
+		const prototype = Object.getPrototypeOf(value);
+		if (
+			!Array.isArray(value) &&
+			prototype !== Object.prototype &&
+			prototype !== null
+		)
+			throw new Error("Tool authorization requires plain data");
+		for (const child of Object.values(value)) freezeGateData(child);
+		Object.freeze(value);
+	} else if (
+		typeof value === "function" ||
+		typeof value === "symbol" ||
+		typeof value === "bigint"
+	) {
+		throw new Error("Tool authorization requires plain data");
+	}
+	return value;
 }
 
 interface HookBag {
@@ -517,6 +553,18 @@ function textFromToolMessage(message: AgentMessage | undefined): string {
 	}
 }
 
+/** Capture ingress before asynchronous setup; each lifecycle observer gets its own copy. */
+function cloneRunInput(
+	input: AgentRunInput | undefined,
+): AgentRunInput | undefined {
+	if (input === undefined || typeof input === "string") return input;
+	const messages = cloneModelRequestData({
+		messages: Array.isArray(input) ? input : [input as AgentMessage],
+		tools: [],
+	}).messages;
+	return Array.isArray(input) ? messages : messages[0];
+}
+
 function normalizeInput(input: AgentRunInput): AgentMessage[] {
 	if (typeof input === "string") {
 		return [createMessage("user", [{ type: "text", text: input }])];
@@ -528,11 +576,13 @@ function normalizeInput(input: AgentRunInput): AgentMessage[] {
 }
 
 export class AgentRuntime {
+	private hostBlocked: string | undefined;
 	private config: Required<Pick<BaseAgentRuntimeConfig, "toolExecution">> &
 		BaseAgentRuntimeConfig;
 	private readonly listeners = new Set<AgentEventListener>();
 	// biome-ignore lint/suspicious/noExplicitAny: tool input/output types vary per tool
 	private readonly tools = new Map<string, AgentTool<any, any>>();
+	private readonly requiredTools = new Map<string, AgentTool>();
 	private hooks: HookBag = {
 		beforeRun: [],
 		afterRun: [],
@@ -610,6 +660,26 @@ export class AgentRuntime {
 			trimNonEmpty(config.messageModelInfo?.id) ??
 			("modelId" in config ? trimNonEmpty(config.modelId) : undefined);
 		const resolved = resolveRuntimeConfig(config);
+		for (const tool of resolved.requiredTools ?? []) {
+			if (
+				!tool ||
+				typeof tool.name !== "string" ||
+				!tool.name.trim() ||
+				tool.name !== tool.name.trim() ||
+				typeof tool.execute !== "function" ||
+				this.requiredTools.has(tool.name)
+			) {
+				throw new Error("Invalid required tool inventory");
+			}
+			const { execute, ...metadata } = tool;
+			this.requiredTools.set(
+				tool.name,
+				Object.freeze({
+					...freezeGateData(structuredClone(metadata)),
+					execute,
+				}),
+			);
+		}
 		this.config = {
 			...resolved,
 			toolExecution: resolved.toolExecution ?? "sequential",
@@ -620,12 +690,18 @@ export class AgentRuntime {
 		this.state.messages = cloneMessages(resolved.initialMessages ?? []);
 	}
 
-	async run(input: AgentRunInput): Promise<AgentRunResult> {
-		return this.execute(input);
+	async run(
+		input: AgentRunInput,
+		options?: AgentRunOptions,
+	): Promise<AgentRunResult> {
+		return this.execute(input, options);
 	}
 
-	async continue(input?: AgentRunInput): Promise<AgentRunResult> {
-		return this.execute(input);
+	async continue(
+		input?: AgentRunInput,
+		options?: AgentRunOptions,
+	): Promise<AgentRunResult> {
+		return this.execute(input, options);
 	}
 
 	/** Interrupt only the current model request; running tools finish normally. */
@@ -710,8 +786,11 @@ export class AgentRuntime {
 	}
 
 	private async initialize(): Promise<void> {
+		for (const [name, tool] of this.requiredTools) this.tools.set(name, tool);
 		this.registerHooks(this.config.hooks);
 		for (const tool of this.config.tools ?? []) {
+			if (this.requiredTools.has(tool.name))
+				throw new Error(`Required tool name is reserved: ${tool.name}`);
 			this.tools.set(tool.name, tool);
 		}
 		for (const plugin of this.config.plugins ?? []) {
@@ -721,6 +800,8 @@ export class AgentRuntime {
 				systemPrompt: this.config.systemPrompt,
 			});
 			for (const tool of setup?.tools ?? []) {
+				if (this.requiredTools.has(tool.name))
+					throw new Error(`Required tool name is reserved: ${tool.name}`);
 				this.tools.set(tool.name, tool);
 			}
 			this.registerHooks(setup?.hooks);
@@ -767,6 +848,71 @@ export class AgentRuntime {
 		].filter((message): message is string => Boolean(message));
 	}
 
+	private async checkCompletion(
+		source: AgentCompletionContext["source"],
+		candidate: AgentMessage,
+	): Promise<AgentCompletionDecision> {
+		if (!this.config.completionGate) return { outcome: "allow" };
+		try {
+			const decision = await this.config.completionGate({
+				source,
+				candidate: cloneMessages([candidate])[0],
+				snapshot: this.snapshot(),
+				signal: this.abortController?.signal,
+			});
+			this.throwIfAborted();
+			if (decision?.outcome === "allow") return decision;
+			if (
+				(decision?.outcome === "continue" || decision?.outcome === "blocked") &&
+				typeof decision.diagnostic === "string" &&
+				decision.diagnostic.trim()
+			)
+				return decision;
+			return {
+				outcome: "blocked",
+				diagnostic: "Completion check returned an invalid decision.",
+			};
+		} catch {
+			this.throwIfAborted();
+			return {
+				outcome: "blocked",
+				diagnostic: "Completion check unavailable; recover before continuing.",
+			};
+		}
+	}
+
+	private async finishBlocked(diagnostic: string): Promise<AgentRunResult> {
+		const result = this.finishRun("blocked", undefined, diagnostic);
+		await this.callAfterRunHooks(result);
+		await this.emit({
+			type: "run-finished",
+			snapshot: this.snapshot(),
+			result,
+		});
+		return result;
+	}
+
+	private async publishCheckedContent(message: AgentMessage): Promise<void> {
+		const text = textFromMessage(message);
+		if (text)
+			await this.emit({
+				type: "assistant-text-delta",
+				snapshot: this.snapshot(),
+				iteration: this.state.iteration,
+				text,
+				accumulatedText: text,
+			});
+		for (const part of message.content) {
+			if (part.type === "media")
+				await this.emit({
+					type: "assistant-media",
+					snapshot: this.snapshot(),
+					iteration: this.state.iteration,
+					media: part.media,
+				});
+		}
+	}
+
 	private async addUserReminderMessage(
 		text: string,
 		metadata: AgentMessage["metadata"] = {},
@@ -784,7 +930,12 @@ export class AgentRuntime {
 		return reminderMessage;
 	}
 
-	private async execute(input?: AgentRunInput): Promise<AgentRunResult> {
+	private async execute(
+		input?: AgentRunInput,
+		options?: AgentRunOptions,
+	): Promise<AgentRunResult> {
+		const appendInput = options?.appendInput !== false;
+		const capturedInput = cloneRunInput(input);
 		await this.ensureInitialized();
 		if (this.state.status === "running") {
 			throw new Error("Agent runtime is already running");
@@ -804,14 +955,18 @@ export class AgentRuntime {
 		this.overflowRecoveryAttempted = false;
 		this.state.lastRequestInputTokens = 0;
 		this.pendingHookContexts = [];
+		this.hostBlocked = undefined;
 		this.maxTokensRecoveryCount = 0;
 		this.maxTokensRecoveryAttempted = false;
 
 		try {
-			await this.callBeforeRunHooks();
+			await this.callBeforeRunHooks(capturedInput);
 			await this.emit({ type: "run-started", snapshot: this.snapshot() });
 
-			for (const message of input ? normalizeInput(input) : []) {
+			// Empty strings retain the historical no-append behavior used by seeded resumes.
+			for (const message of appendInput && capturedInput
+				? normalizeInput(capturedInput)
+				: []) {
 				this.state.messages.push(message);
 				await this.emit({
 					type: "message-added",
@@ -900,8 +1055,63 @@ export class AgentRuntime {
 						part.type === "tool-call",
 				);
 
+				// Do not put a candidate final answer in the public transcript or
+				// emit it while the host's async obligations are still unresolved.
+				if (
+					this.config.completionGate &&
+					!interrupted &&
+					(toolCalls.length === 0 ||
+						toolCalls.some(
+							(call) => this.tools.get(call.toolName)?.lifecycle?.completesRun,
+						))
+				) {
+					const decision = await this.checkCompletion(
+						toolCalls.length ? "tool" : "text",
+						message,
+					);
+					if (decision.outcome === "blocked")
+						return await this.finishBlocked(decision.diagnostic);
+					if (decision.outcome === "continue") {
+						await this.addUserReminderMessage(decision.diagnostic);
+						await this.emit({
+							type: "turn-finished",
+							snapshot: this.snapshot(),
+							iteration: this.state.iteration,
+							toolCallCount: 0,
+						});
+						continue;
+					}
+					const reminders =
+						toolCalls.length === 0 ? this.getCompletionReminderMessages() : [];
+					if (reminders.length) {
+						for (const reminder of reminders)
+							await this.addUserReminderMessage(reminder);
+						await this.emit({
+							type: "turn-finished",
+							snapshot: this.snapshot(),
+							iteration: this.state.iteration,
+							toolCallCount: 0,
+						});
+						continue;
+					}
+				}
 				finalAssistantMessage = message;
-				await this.recordAssistantMessage(message, finishReason);
+				const deferCompletionContent =
+					this.config.completionGate &&
+					toolCalls.some(
+						(call) => this.tools.get(call.toolName)?.lifecycle?.completesRun,
+					);
+				const publishedMessage = deferCompletionContent
+					? {
+							...message,
+							content: message.content.filter(
+								(part) => part.type !== "text" && part.type !== "media",
+							),
+						}
+					: message;
+				if (this.config.completionGate && !deferCompletionContent)
+					await this.publishCheckedContent(message);
+				await this.recordAssistantMessage(publishedMessage, finishReason);
 
 				if (interrupted) {
 					await this.emit({
@@ -951,8 +1161,9 @@ export class AgentRuntime {
 						iteration: this.state.iteration,
 						toolCallCount: 0,
 					});
-					const completionReminderMessages =
-						this.getCompletionReminderMessages();
+					const completionReminderMessages = this.config.completionGate
+						? []
+						: this.getCompletionReminderMessages();
 					if (completionReminderMessages.length > 0) {
 						for (const reminderMessage of completionReminderMessages) {
 							await this.addUserReminderMessage(reminderMessage);
@@ -979,6 +1190,7 @@ export class AgentRuntime {
 						message: toolMessage,
 					});
 				}
+				if (this.hostBlocked) return await this.finishBlocked(this.hostBlocked);
 				if (
 					finishReason === "unknown" &&
 					!toolMessages.some((toolMessage) =>
@@ -1005,6 +1217,17 @@ export class AgentRuntime {
 					toolMessages,
 				);
 				if (terminalToolMessage) {
+					if (deferCompletionContent) {
+						publishedMessage.content = message.content;
+						await this.publishCheckedContent(message);
+						await this.emit({
+							type: "assistant-message",
+							snapshot: this.snapshot(),
+							iteration: this.state.iteration,
+							message,
+							finishReason,
+						});
+					}
 					const result = this.finishRun(
 						"completed",
 						finalAssistantMessage,
@@ -1024,6 +1247,11 @@ export class AgentRuntime {
 				`Agent runtime exceeded maxIterations (${this.config.maxIterations})`,
 			);
 		} catch (error) {
+			if (
+				error instanceof ModelRequestBlockedError &&
+				!this.abortController.signal.aborted
+			)
+				return await this.finishBlocked(error.message);
 			const normalized =
 				error instanceof Error ? error : new Error(String(error));
 			const isControlledStop = normalized instanceof ControlledStopError;
@@ -1130,10 +1358,13 @@ export class AgentRuntime {
 		});
 	}
 
-	private async callBeforeRunHooks(): Promise<void> {
+	private async callBeforeRunHooks(
+		input: AgentRunInput | undefined,
+	): Promise<void> {
 		for (const hook of this.hooks.beforeRun) {
 			const result = await hook({
 				snapshot: this.snapshot(),
+				input: cloneRunInput(input),
 			});
 			this.applyStopControl(result);
 			// Collected here, injected after the run's input messages are
@@ -1811,13 +2042,14 @@ export class AgentRuntime {
 							part: { type: "text", text: event.text },
 						});
 					}
-					await this.emit({
-						type: "assistant-text-delta",
-						snapshot: this.snapshot(),
-						iteration: this.state.iteration,
-						text: event.text,
-						accumulatedText,
-					});
+					if (!this.config.completionGate)
+						await this.emit({
+							type: "assistant-text-delta",
+							snapshot: this.snapshot(),
+							iteration: this.state.iteration,
+							text: event.text,
+							accumulatedText,
+						});
 					break;
 				}
 				case "media": {
@@ -1828,12 +2060,13 @@ export class AgentRuntime {
 							media: event.media,
 						},
 					});
-					await this.emit({
-						type: "assistant-media",
-						snapshot: this.snapshot(),
-						iteration: this.state.iteration,
-						media: event.media,
-					});
+					if (!this.config.completionGate)
+						await this.emit({
+							type: "assistant-media",
+							snapshot: this.snapshot(),
+							iteration: this.state.iteration,
+							media: event.media,
+						});
 					break;
 				}
 				case "reasoning-delta": {
@@ -2080,6 +2313,38 @@ export class AgentRuntime {
 		return { message, finishReason, interrupted };
 	}
 
+	private async authorizeModelRequest(
+		request: AgentModelRequest,
+	): Promise<AgentModelRequest> {
+		try {
+			const decision = await this.config.modelRequestGate!({
+				snapshot: this.snapshot(),
+				request: cloneModelRequestData(request),
+				signal: request.signal,
+			});
+			if (decision?.outcome === "allow") {
+				return {
+					...cloneModelRequestData(decision.request),
+					signal: request.signal,
+				};
+			}
+			if (
+				decision?.outcome === "blocked" &&
+				typeof decision.diagnostic === "string" &&
+				decision.diagnostic.trim()
+			) {
+				throw new ModelRequestBlockedError(decision.diagnostic);
+			}
+			throw new ModelRequestBlockedError(
+				"Model request authorization returned an invalid decision.",
+			);
+		} catch (error) {
+			if (error instanceof ModelRequestBlockedError) throw error;
+			throw new ModelRequestBlockedError(
+				"Model request authorization unavailable; recover before continuing.",
+			);
+		}
+	}
 	private async *openTaskLifecycleStream(
 		request: AgentModelRequest,
 		getTaskLifecycleDurationMs: () => number | undefined,
@@ -2087,7 +2352,24 @@ export class AgentRuntime {
 		let stream: AsyncIterable<AgentModelEvent>;
 		let phase = "provider_request_started";
 		try {
-			stream = await this.config.model.stream(request);
+			const model = this.config.model;
+			const callModel = model.stream.bind(model);
+			const enforcesHostToolExecution =
+				model.enforcesHostToolExecution === true;
+			if (this.config.modelRequestGate) {
+				request = await this.authorizeModelRequest(request);
+				this.throwIfAborted();
+				if (request.signal?.aborted) return;
+			}
+			if (
+				request.toolExecutionPolicy === "host-only" &&
+				(!enforcesHostToolExecution || request.modelTools?.length)
+			) {
+				throw new ModelRequestBlockedError(
+					"Adapter cannot enforce host-only tool execution. Select a capable adapter and disable provider-executed tools.",
+				);
+			}
+			stream = await callModel(request);
 			this.throwIfAborted();
 			phase = "provider_stream_started";
 			this.captureTaskLifecycle(TASK_PROVIDER_STREAM_STARTED_EVENT, {
@@ -2359,13 +2641,21 @@ export class AgentRuntime {
 			) {
 				index += 1;
 			}
-			results.push(
-				...(await Promise.all(
-					prepared
-						.slice(start, index)
-						.map((call) => this.executePreparedTool(call)),
-				)),
-			);
+			const executing = prepared
+				.slice(start, index)
+				.map((call) => this.executePreparedTool(call));
+			if (this.config.toolResultGate) {
+				// Do not close the host lifecycle while another already dispatched
+				// call still needs its mandatory outcome acknowledgment.
+				const settled = await Promise.allSettled(executing);
+				const failed = settled.find((item) => item.status === "rejected");
+				if (failed?.status === "rejected") throw failed.reason;
+				for (const item of settled) {
+					if (item.status === "fulfilled") results.push(item.value);
+				}
+			} else {
+				results.push(...(await Promise.all(executing)));
+			}
 		}
 		return results;
 	}
@@ -2462,11 +2752,13 @@ export class AgentRuntime {
 			}
 		}
 
+		const basePolicy = resolveToolPolicy(
+			toolCall.toolName,
+			this.config.toolPolicies,
+		);
+		const effectivePolicy = { ...basePolicy, ...policyOverride };
 		if (tool && !skipReason) {
-			const policy = {
-				...resolveToolPolicy(toolCall.toolName, this.config.toolPolicies),
-				...policyOverride,
-			};
+			const policy = effectivePolicy;
 			if (policy.enabled === false) {
 				skipReason = `Tool "${toolCall.toolName}" is disabled by policy`;
 			} else if (policy.autoApprove === false) {
@@ -2487,6 +2779,8 @@ export class AgentRuntime {
 			tool,
 			input,
 			skipReason,
+			basePolicy,
+			effectivePolicy,
 		};
 	}
 
@@ -2530,17 +2824,132 @@ export class AgentRuntime {
 		}
 	}
 
+	private async authorizeToolExecution(
+		prepared: PreparedToolExecution,
+	): Promise<{ input: unknown; decision: AgentToolExecutionDecision }> {
+		try {
+			const input = structuredClone(prepared.input);
+			const toolCall = freezeGateData(
+				structuredClone({ ...prepared.toolCall, input }),
+			);
+			const decision = await this.config.toolExecutionGate!({
+				snapshot: this.snapshot(),
+				toolCall,
+				basePolicy: freezeGateData(structuredClone(prepared.basePolicy ?? {})),
+				effectivePolicy: freezeGateData(
+					structuredClone(prepared.effectivePolicy ?? {}),
+				),
+				signal: this.abortController?.signal,
+			});
+			if (decision?.outcome === "allow")
+				return { input, decision: { outcome: "allow" } };
+			if (
+				(decision?.outcome === "deny" || decision?.outcome === "blocked") &&
+				typeof decision.diagnostic === "string" &&
+				decision.diagnostic.trim()
+			)
+				return {
+					input,
+					decision: {
+						outcome: decision.outcome,
+						diagnostic: decision.diagnostic,
+					},
+				};
+			return {
+				input,
+				decision: {
+					outcome: "blocked",
+					diagnostic: "Tool authorization returned an invalid decision.",
+				},
+			};
+		} catch {
+			return {
+				input: undefined,
+				decision: {
+					outcome: "blocked",
+					diagnostic:
+						"Tool authorization unavailable; recover before continuing.",
+				},
+			};
+		}
+	}
+
 	private async executePreparedTool(
 		prepared: PreparedToolExecution,
 	): Promise<AgentMessage> {
+		const guardedCompletion =
+			this.config.completionGate && prepared.tool?.lifecycle?.completesRun;
+		if (guardedCompletion && !prepared.skipReason) {
+			const decision = await this.checkCompletion(
+				"tool",
+				createMessage("assistant", [prepared.toolCall]),
+			);
+			if (decision.outcome !== "allow") {
+				prepared.skipReason = decision.diagnostic;
+				if (decision.outcome === "blocked")
+					this.hostBlocked = decision.diagnostic;
+			}
+		}
 		const startedAt = new Date();
 		await this.emit({
 			type: "tool-started",
 			snapshot: this.snapshot(),
 			iteration: this.state.iteration,
-			toolCall: prepared.toolCall,
+			toolCall:
+				this.config.toolExecutionGate || this.config.toolResultGate
+					? { ...prepared.toolCall }
+					: prepared.toolCall,
 		});
 
+		// A rejected result prevents later dispatch even without a separate execution gate.
+		if (this.config.toolResultGate && this.hostBlocked)
+			prepared.skipReason = this.hostBlocked;
+
+		// No optional callback is awaited between authorization and local dispatch.
+		const execute = prepared.tool?.execute.bind(prepared.tool);
+		let executionInput = prepared.input;
+		if (
+			this.config.toolExecutionGate &&
+			prepared.tool &&
+			!prepared.skipReason
+		) {
+			if (this.hostBlocked) {
+				prepared.skipReason = this.hostBlocked;
+			} else {
+				const authorization = await this.authorizeToolExecution(prepared);
+				this.throwIfAborted();
+				if (authorization.decision.outcome !== "allow") {
+					prepared.skipReason = authorization.decision.diagnostic;
+					if (authorization.decision.outcome === "blocked")
+						this.hostBlocked = authorization.decision.diagnostic;
+				} else if (this.hostBlocked) {
+					// Another parallel authorization may have blocked while this one waited.
+					prepared.skipReason = this.hostBlocked;
+				} else {
+					executionInput = authorization.input;
+					// Audit hooks see the authorized input, even if an earlier hook retained its original.
+					prepared.input = structuredClone(executionInput);
+					prepared.toolCall = { ...prepared.toolCall, input: prepared.input };
+				}
+			}
+		}
+		let resultCall: Readonly<AgentToolCallPart> | undefined;
+		if (this.config.toolResultGate) {
+			try {
+				resultCall = freezeGateData(
+					structuredClone({ ...prepared.toolCall, input: executionInput }),
+				);
+			} catch {
+				this.hostBlocked =
+					"Tool result context unavailable; recover before continuing.";
+				prepared.skipReason = this.hostBlocked;
+			}
+		}
+		let mandatoryRefusal =
+			this.config.toolExecutionGate || this.config.toolResultGate
+				? prepared.skipReason
+				: undefined;
+		const executed = !prepared.skipReason && !!prepared.tool;
 		let result: AgentToolResult;
 		if (prepared.skipReason) {
 			result = {
@@ -2554,7 +2963,7 @@ export class AgentRuntime {
 			};
 		} else {
 			try {
-				const output = await prepared.tool.execute(prepared.input, {
+				const output = await execute!(executionInput, {
 					sessionId: this.config.sessionId,
 					agentId: this.state.agentId,
 					conversationId: this.config.conversationId,
@@ -2565,6 +2974,9 @@ export class AgentRuntime {
 					metadata: this.config.toolContextMetadata,
 					snapshot: this.snapshot(),
 					emitUpdate: (update: unknown) => {
+						// Completion-tool updates may contain the final answer. Its
+						// checked result is delivered after audit hooks instead.
+						if (guardedCompletion) return;
 						void this.emit({
 							type: "tool-updated",
 							snapshot: this.snapshot(),
@@ -2588,7 +3000,41 @@ export class AgentRuntime {
 		const endedAt = new Date();
 		const durationMs = Math.max(0, endedAt.getTime() - startedAt.getTime());
 
-		if (prepared.tool) {
+		let resultBlocked: string | undefined;
+		if (this.config.toolResultGate) {
+			try {
+				if (!resultCall) throw new Error("Missing captured tool identity");
+				const decision = await this.config.toolResultGate({
+					snapshot: this.snapshot(),
+					toolCall: resultCall,
+					result: freezeGateData(structuredClone(result)),
+					executed,
+					startedAtUtc: startedAt.toISOString(),
+					endedAtUtc: endedAt.toISOString(),
+					durationMs,
+					signal: this.abortController?.signal,
+				});
+				if (decision?.outcome !== "allow") {
+					resultBlocked =
+						decision?.outcome === "blocked" &&
+						typeof decision.diagnostic === "string" &&
+						decision.diagnostic.trim()
+							? decision.diagnostic
+							: "Tool result acknowledgment returned an invalid decision.";
+				}
+			} catch {
+				resultBlocked =
+					"Tool result acknowledgment unavailable; recover before continuing.";
+			}
+			if (resultBlocked) {
+				this.hostBlocked ??= resultBlocked;
+				mandatoryRefusal = resultBlocked;
+			}
+			// Settled executions are observed even when canceled; cancellation still wins.
+			this.throwIfAborted();
+		}
+
+		if (prepared.tool && !resultBlocked) {
 			for (const hook of this.hooks.afterTool) {
 				const after = (await hook({
 					snapshot: this.snapshot(),
@@ -2615,7 +3061,11 @@ export class AgentRuntime {
 			}
 		}
 
-		const message = createMessage("tool", [
+		// Optional hooks may observe refusals, but cannot replace or mutate them into success.
+		if (mandatoryRefusal)
+			result = { output: { error: mandatoryRefusal }, isError: true };
+
+		let message = createMessage("tool", [
 			{
 				type: "tool-result",
 				toolCallId: prepared.toolCall.toolCallId,
@@ -2624,6 +3074,22 @@ export class AgentRuntime {
 				isError: result.isError,
 			},
 		]);
+		if (guardedCompletion && !result.isError) {
+			const decision = await this.checkCompletion("tool-result", message);
+			if (decision.outcome !== "allow") {
+				message = createMessage("tool", [
+					{
+						type: "tool-result",
+						toolCallId: prepared.toolCall.toolCallId,
+						toolName: prepared.toolCall.toolName,
+						output: { error: decision.diagnostic },
+						isError: true,
+					},
+				]);
+				if (decision.outcome === "blocked")
+					this.hostBlocked = decision.diagnostic;
+			}
+		}
 
 		await this.emit({
 			type: "tool-finished",

@@ -17,6 +17,8 @@ import type { HubEventLogOptions } from "./hub-event-log";
 import type { HubRunQueueOptions } from "./hub-run-queue";
 
 export interface HubWebSocketServerOptions {
+	/** Explicit identity of the host that owns governed session construction. */
+	peerIdentity?: import("@cline/shared").HubPeerIdentity;
 	/** Hub-owned full-text session history index configuration. */
 	sessionSearchOptions?: SessionHistorySearchOptions;
 	/** Workspace authority assigned by the Hub to authenticated clients. */

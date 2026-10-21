@@ -1,5 +1,4 @@
 import {
-	completeClineDeviceAuth,
 	getProviderConfigFields,
 	isLocalAuthProvider,
 	isOAuthProvider,
@@ -9,12 +8,14 @@ import {
 	ProviderSettingsManager,
 	saveLocalProviderOAuthCredentials,
 	saveLocalProviderSettings,
-	startClineDeviceAuth,
 } from "@cline/core";
-import { getClineEnvironmentConfig } from "@cline/shared";
 import type { ChoiceContext } from "@opentui-ui/dialog";
 import { useDialogKeyboard } from "@opentui-ui/dialog/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	CLINE_ACCOUNT_DISABLED_MESSAGE,
+	isClineCloudProvider,
+} from "../../../utils/cloud-policy";
 import {
 	checkLocalCliInstalled,
 	type LocalCliStatus,
@@ -39,7 +40,6 @@ import {
 	type SearchableItem,
 } from "../searchable-list";
 import {
-	buildClinePassSubscriptionPageUrl,
 	resolveOAuthWaitKeyAction,
 	saveManualProviderApiKey,
 } from "./provider-picker-helpers";
@@ -337,87 +337,17 @@ export function UseExistingOrReconfigureContent(
 	);
 }
 
-function ClinePassBrowserPageContent(
-	props: ChoiceContext<boolean> & {
-		providerName: string;
-		pageLabel: string;
-		url: string;
-		openedStatus: string;
-	},
+export function ClinePassSubscriptionContent(
+	props: ChoiceContext<boolean> & { providerName: string },
 ) {
-	const {
-		resolve,
-		dismiss,
-		dialogId,
-		providerName,
-		pageLabel,
-		url,
-		openedStatus,
-	} = props;
-	const palette = useDialogPalette();
-	const [status, setStatus] = useState("Opening browser...");
-
-	useEffect(() => {
-		void open(url, { wait: false })
-			.then(() => {
-				setStatus(openedStatus);
-			})
-			.catch(() => {
-				setStatus("Could not open browser automatically. Open the URL below.");
-			});
-	}, [url, openedStatus]);
-
-	useDialogKeyboard((key) => {
-		if (key.name === "escape") {
-			dismiss();
-			return;
-		}
-		if (key.name === "return" || key.name === "enter") {
-			resolve(true);
-		}
-	}, dialogId);
-
+	useDialogKeyboard(() => props.dismiss(), props.dialogId);
 	return (
 		<box flexDirection="column" paddingX={1} gap={1}>
-			<text fg={palette.act}>
-				<strong>{providerName}</strong>
-			</text>
-
-			<text>{status}</text>
-
-			<text fg="gray">{pageLabel}:</text>
-			<text fg={palette.act} selectable>
-				<a href={url}>{url}</a>
-			</text>
-
-			<text fg="gray">
-				<em>Enter or Esc to go back</em>
-			</text>
+			<text>{CLINE_ACCOUNT_DISABLED_MESSAGE}</text>
+			<text>Press any key to go back.</text>
 		</box>
 	);
 }
-
-export function ClinePassSubscriptionContent(
-	props: ChoiceContext<boolean> & {
-		providerName: string;
-	},
-) {
-	const subscriptionUrl = useMemo(
-		() =>
-			buildClinePassSubscriptionPageUrl(getClineEnvironmentConfig().appBaseUrl),
-		[],
-	);
-
-	return (
-		<ClinePassBrowserPageContent
-			{...props}
-			pageLabel="Subscription page"
-			url={subscriptionUrl}
-			openedStatus="Opened subscription page in your browser."
-		/>
-	);
-}
-
 const DEFAULT_FIELD_LABELS: Partial<Record<ProviderConfigFieldKey, string>> = {
 	apiKey: "API key",
 	baseUrl: "Base URL",
@@ -765,14 +695,14 @@ export function OAuthLoginContent(
 		allowApiKeyFallback,
 	} = props;
 	const palette = useDialogPalette();
-	const [mode, setMode] = useState<"browser" | "device">(
+	const [mode] = useState<"browser" | "device">(
 		providerId === "cline" ? "device" : "browser",
 	);
 	const [status, setStatus] = useState("Opening browser...");
 	const [authUrl, setAuthUrl] = useState("");
 	const [error, setError] = useState("");
-	const [deviceUserCode, setDeviceUserCode] = useState("");
-	const [deviceVerifyUrl, setDeviceVerifyUrl] = useState("");
+	const [deviceUserCode] = useState("");
+	const [deviceVerifyUrl] = useState("");
 	const [deviceError, setDeviceError] = useState("");
 	const activeAuthAttemptRef = useRef<AuthAttempt | undefined>(undefined);
 
@@ -794,66 +724,12 @@ export function OAuthLoginContent(
 		return activeAuthAttemptRef.current === attempt && !attempt.cancelled;
 	}, []);
 
-	const startDeviceAuthCodeFlow = useCallback(() => {
-		cancelAuthAttempt();
-		const attempt = startAuthAttempt();
-		setMode("device");
-		setError("");
-		setDeviceUserCode("");
-		setDeviceVerifyUrl("");
-		setDeviceError("");
-
-		const manager = new ProviderSettingsManager();
-		const existing = manager.getProviderSettings(providerId);
-		const apiBaseUrl =
-			existing?.baseUrl?.trim() || getClineEnvironmentConfig().apiBaseUrl;
-
-		startClineDeviceAuth()
-			.then((result) => {
-				if (!isActiveAuthAttempt(attempt)) return;
-				setDeviceUserCode(result.userCode);
-				setDeviceVerifyUrl(
-					result.verificationUriComplete || result.verificationUri,
-				);
-
-				completeClineDeviceAuth({
-					deviceCode: result.deviceCode,
-					expiresInSeconds: result.expiresInSeconds,
-					pollIntervalSeconds: result.pollIntervalSeconds,
-					apiBaseUrl,
-					provider: providerId,
-				})
-					.then((credentials) => {
-						if (!isActiveAuthAttempt(attempt)) return;
-						saveLocalProviderOAuthCredentials(
-							manager,
-							providerId,
-							existing,
-							credentials,
-						);
-						resolve(true);
-					})
-					.catch((err: unknown) => {
-						if (!isActiveAuthAttempt(attempt)) return;
-						setDeviceError(err instanceof Error ? err.message : String(err));
-					});
-			})
-			.catch((err: unknown) => {
-				if (!isActiveAuthAttempt(attempt)) return;
-				setDeviceError(err instanceof Error ? err.message : String(err));
-			});
-	}, [
-		providerId,
-		resolve,
-		startAuthAttempt,
-		isActiveAuthAttempt,
-		cancelAuthAttempt,
-	]);
-
 	// biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
 	useEffect(() => {
-		if (providerId === "cline") {
-			startDeviceAuthCodeFlow();
+		if (isClineCloudProvider(providerId)) {
+			setError(CLINE_ACCOUNT_DISABLED_MESSAGE);
+			setDeviceError(CLINE_ACCOUNT_DISABLED_MESSAGE);
+			setStatus("Authentication unavailable");
 			return cancelAuthAttempt;
 		}
 

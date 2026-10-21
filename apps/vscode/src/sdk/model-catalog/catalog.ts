@@ -1,6 +1,7 @@
 import { listLocalProviders, type ModelCatalogConfig, resolveProviderConfig } from "@cline/core"
 import { type ProviderConfig, resolveProviderUsageCostDisplay } from "@cline/llms"
 import { type ProviderListItem } from "@cline/shared"
+import { assertDirectProvider, isClineCloudProvider } from "@cline/qbrain-governance/cloud-policy"
 import { getProviderSettingsManager } from "../provider-migration"
 import type {
 	CatalogError,
@@ -191,9 +192,10 @@ function toProviderListing(provider: ProviderListItem): ProviderListing {
 async function listSdkProviderListings(): Promise<ReadonlyArray<ProviderListing>> {
 	const manager = getProviderSettingsManager()
 	const { providers } = await listLocalProviders(manager, {
-		isClinePassEnabled: true,
+		isClinePassEnabled: false,
+		includeProvider: (id) => !isClineCloudProvider(id),
 	})
-	return providers.map(toProviderListing)
+	return providers.filter((provider) => !isClineCloudProvider(provider.id)).map(toProviderListing)
 }
 
 async function resolveSdkModels(
@@ -203,7 +205,9 @@ async function resolveSdkModels(
 	selection: ModelSelection | undefined,
 	now: () => number,
 ): Promise<ProviderModelsRecord> {
+	assertDirectProvider(providerId)
 	const sdkProviderId = toSdkProviderId(providerId)
+	assertDirectProvider(sdkProviderId)
 	const resolved = await resolveProviderConfig(
 		sdkProviderId,
 		DEFAULT_MODEL_CATALOG_CONFIG,

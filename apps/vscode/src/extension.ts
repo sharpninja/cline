@@ -1,3 +1,5 @@
+import "./hosts/storage-bootstrap"
+
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 
@@ -29,14 +31,6 @@ import { improveWithCline } from "./core/controller/commands/improveWithCline"
 import { sendAddToInputEvent } from "./core/controller/ui/subscribeToAddToInput"
 import { sendShowWebviewEvent } from "./core/controller/ui/subscribeToShowWebview"
 import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
-import {
-	cleanupMcpMarketplaceCatalogFromGlobalState,
-	cleanupOldApiKey,
-	migrateCustomInstructionsToGlobalRules,
-	migrateTaskHistoryToFile,
-	migrateWelcomeViewCompleted,
-	migrateWorkspaceToGlobalStorage,
-} from "./core/storage/state-migrations"
 import { workspaceResolver } from "./core/workspace"
 import { findMatchingNotebookCell, getContextForCommand, showWebview } from "./hosts/vscode/commandUtils"
 import { abortCommitGeneration, generateCommitMsg } from "./hosts/vscode/commit-message-generator"
@@ -48,7 +42,6 @@ import {
 import { DIFF_VIEW_URI_SCHEME, diffContentProvider } from "./hosts/vscode/VscodeDiffContentProvider"
 import { EDIT_PREVIEW_URI_SCHEME, editPreviewContentProvider, VscodeEditPreview } from "./hosts/vscode/VscodeEditPreview"
 import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
-import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
 import { telemetryService } from "./services/telemetry"
@@ -70,23 +63,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Before anything spawns with the workspace as cwd (rg, git, hooks, MCP).
 	disableCurrentDirectoryExecutableSearch()
 
-	// 1. Set up HostProvider for VSCode
-	// IMPORTANT: This must be done before any service can be registered
-	setupHostProvider(context)
-
-	// 2. Clean up legacy data patterns within VSCode's native storage.
-	// Moves workspace→global keys, task history→file, custom instructions→rules, etc.
-	// Must run BEFORE the file export so we copy clean state.
-	await cleanupLegacyVSCodeStorage(context)
-
-	// 3. One-time export of VSCode's native storage to shared file-backed stores.
-	// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
+	// Create only host-policy storage. Never import or clean up upstream native
+	// mementos, secrets, task history or custom instructions during activation.
 	const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 	const storageContext = createStorageContext({ workspacePath })
-	await exportVSCodeStorageToSharedFiles(context, storageContext)
+	setupHostProvider(context, storageContext.dataDir)
 
-	// 4. Register services and perform common initialization
-	// IMPORTANT: Must be done after host provider is setup and migrations are complete
+	// Register services only after the private file stores and host are ready.
 	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
 
 	// 5. Register services and commands specific to VS Code
@@ -189,7 +172,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Register size testing commands in development mode
 	if (IS_DEV) {
-		vscode.commands.executeCommand("setContext", "cline.isDevMode", IS_DEV)
+		vscode.commands.executeCommand("setContext", ExtensionRegistryInfo.contextKeys.isDevMode, IS_DEV)
 		// Use dynamic import to avoid loading the module in production
 		import("./dev/commands/tasks")
 			.then((module) => {
@@ -563,7 +546,7 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 	})
 }
 
-function setupHostProvider(context: ExtensionContext) {
+function setupHostProvider(context: ExtensionContext, dataDir: string) {
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Cline] Setting up VS Code host...")
 
@@ -595,7 +578,7 @@ function setupHostProvider(context: ExtensionContext) {
 		getCallbackUrl,
 		getBinaryLocation,
 		context.extensionUri.fsPath,
-		context.globalStorageUri.fsPath,
+		dataDir,
 	)
 }
 
@@ -687,40 +670,4 @@ if (IS_DEV) {
 
 		vscode.commands.executeCommand("workbench.action.reloadWindow")
 	})
-}
-
-// VSCode-specific storage migrations
-async function cleanupLegacyVSCodeStorage(context: ExtensionContext): Promise<void> {
-	try {
-		await cleanupOldApiKey(context)
-		// Migrate is not done if the new storage does not have the lastShownAnnouncementId flag
-		const hasMigrated = context.globalState.get("lastShownAnnouncementId")
-		if (hasMigrated !== undefined) {
-			return
-		}
-
-		Logger.info("[VS Code Storage Migrations] Starting")
-
-		// Migrate custom instructions to global Cline rules (one-time cleanup)
-		await migrateCustomInstructionsToGlobalRules(context)
-
-		// Migrate welcomeViewCompleted setting based on existing API keys (one-time cleanup)
-		await migrateWelcomeViewCompleted(context)
-
-		// Migrate workspace storage values back to global storage (reverting previous migration)
-		await migrateWorkspaceToGlobalStorage(context)
-
-		// Ensure taskHistory.json exists and migrate legacy state (runs once)
-		await migrateTaskHistoryToFile(context)
-
-		// Clean up MCP marketplace catalog from global state (moved to disk cache)
-		await cleanupMcpMarketplaceCatalogFromGlobalState(context)
-
-		// lastShownAnnouncementId will be set when announcement is shown
-		// after activation so we don't need to set it here.
-
-		Logger.info("[VS Code Storage Migrations] Completed")
-	} catch (error) {
-		Logger.warn(`[VS Code Storage Migrations] Failed${error instanceof Error ? `: ${error.message}` : ""}`)
-	}
 }

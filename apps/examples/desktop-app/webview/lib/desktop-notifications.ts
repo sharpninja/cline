@@ -8,7 +8,7 @@ import { desktopClient, isTauriAvailable } from "@/lib/desktop-client";
 import { eventEnvironmentId, sessionKey } from "./session-identity";
 
 const DESKTOP_NOTIFICATION_SETTINGS_STORAGE_KEY =
-	"cline:desktop-notification-settings:v1";
+	"cline-qb.desktop-notification-settings.v1";
 const MAX_SEEN_REQUESTS = 500;
 
 export const DESKTOP_NOTIFICATION_EVENT_TYPES = [

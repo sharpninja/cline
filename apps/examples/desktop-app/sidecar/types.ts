@@ -12,6 +12,8 @@ import type {
 import type { MessageWithMetadata } from "@cline/llms";
 import type { UserContext } from "@cline/shared";
 
+import { DESKTOP_SIDECAR_PORT } from "../desktop-endpoints";
+
 export const LOCAL_ENVIRONMENT_ID = "local";
 
 export type JsonRecord = Record<string, unknown>;
@@ -173,9 +175,23 @@ export type BunRuntimeApi = {
 
 export const BunRuntime = (globalThis as { Bun?: BunRuntimeApi }).Bun;
 
-export const SIDECAR_PORT = Number(process.env.CLINE_SIDECAR_PORT) || 3126;
-// Loopback-only by default. Set CLINE_SIDECAR_HOST=0.0.0.0 to accept
+function configuredSidecarPort(): number {
+	const raw = process.env.CLINE_QB_SIDECAR_PORT?.trim();
+	if (!raw) return DESKTOP_SIDECAR_PORT;
+	if (
+		!/^\d+$/.test(raw) ||
+		!Number.isSafeInteger(Number(raw)) ||
+		Number(raw) > 65535
+	) {
+		throw new Error(
+			"CLINE_QB_SIDECAR_PORT must be an integer from 0 through 65535.",
+		);
+	}
+	return Number(raw);
+}
+export const SIDECAR_PORT = configuredSidecarPort();
+// Loopback-only by default. Set CLINE_QB_SIDECAR_HOST=0.0.0.0 to accept
 // connections from outside the local host (e.g. Docker port publishing).
 export const SIDECAR_HOST =
-	process.env.CLINE_SIDECAR_HOST?.trim() || "127.0.0.1";
+	process.env.CLINE_QB_SIDECAR_HOST?.trim() || "127.0.0.1";
 export const SIDECAR_MODE = "sidecar";

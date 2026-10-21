@@ -1,6 +1,7 @@
 const noop = () => undefined
 
 export const version = "test"
+export const UIKind = { Desktop: 1, Web: 2 }
 export const commands = { executeCommand: async () => undefined }
 export const env = {
 	clipboard: {

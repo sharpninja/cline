@@ -1,199 +1,47 @@
 import type { AgentEvent } from "@cline/core";
-import { setClineClientIdentity } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerClineClientIdentity } from "./cline-client-identity";
 import {
-	clearClineFreeModelCostCache,
 	shouldZeroClineFreeModelCost,
 	zeroCliAgentEventCost,
 	zeroCliUsageCost,
 } from "./free-model-cost";
 
-afterEach(() => {
-	clearClineFreeModelCostCache();
-	setClineClientIdentity(undefined);
-	vi.unstubAllGlobals();
-});
-
-describe("shouldZeroClineFreeModelCost", () => {
-	it("uses the Cline free model list", async () => {
-		const fetchMock = vi.fn(
-			async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => {
-				return new Response(
-					JSON.stringify({
-						free: [{ id: "deepseek/deepseek-v4-flash" }],
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			},
-		);
-		vi.stubGlobal("fetch", fetchMock);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline",
-				modelId: "deepseek/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(true);
-
-		expect(fetchMock.mock.calls[0]?.[0]).toBe(
-			"https://cline.test/api/v1/ai/cline/recommended-models",
-		);
-	});
-
-	it("identifies the CLI client on the free model request", async () => {
-		const fetchMock = vi.fn(
-			async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => {
-				return new Response(JSON.stringify({ free: [] }), {
-					status: 200,
-					headers: { "content-type": "application/json" },
-				});
-			},
-		);
-		vi.stubGlobal("fetch", fetchMock);
-		registerClineClientIdentity("cline-cli");
-
-		await shouldZeroClineFreeModelCost({
-			providerId: "cline",
-			modelId: "deepseek/deepseek-v4-flash",
-			baseUrl: "https://cline.test/api/v1",
-		});
-
-		expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
-			"X-CLIENT-TYPE": "cline-cli",
-		});
-	});
-
-	it("matches cline-free model ids from the free endpoint bucket exactly", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => {
-				return new Response(
-					JSON.stringify({
-						free: [{ id: "cline-free/deepseek-v4-flash" }],
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			}),
-		);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline",
-				modelId: "cline-free/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(true);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline-pass",
-				modelId: "deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(false);
-	});
-
-	it("does not zero non-Cline providers", async () => {
+afterEach(() => vi.unstubAllGlobals());
+describe("TEST-QB-016/017: free-model pricing has no hosted catalog dependency", () => {
+	it.each([
+		"cline",
+		"cline-pass",
+		" CLINE ",
+	])("rejects %s before fetching pricing", async (providerId) => {
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
-
 		await expect(
 			shouldZeroClineFreeModelCost({
-				providerId: "openrouter",
-				modelId: "deepseek/deepseek-v4-flash",
+				providerId,
+				modelId: "fixture",
 				baseUrl: "https://cline.test/api/v1",
 			}),
-		).resolves.toBe(false);
+		).rejects.toThrow("Configure a direct model provider");
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
-
-	it("zeros cost of free models selected on the cline-pass provider", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => {
-				return new Response(
-					JSON.stringify({
-						free: [{ id: "deepseek/deepseek-v4-flash" }],
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			}),
-		);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline-pass",
-				modelId: "deepseek/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(true);
-
-		// subscription (cline-pass/...) models are not in the free bucket
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline-pass",
-				modelId: "cline-pass/glm-5.1",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(false);
-	});
-
-	it("does not match a paid model by only the final path segment", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => {
-				return new Response(
-					JSON.stringify({
-						free: [{ id: "deepseek/deepseek-v4-flash" }],
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			}),
-		);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline",
-				modelId: "acme/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(false);
-	});
-
-	it("retries after a failed free model list fetch", async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						free: [{ id: "deepseek/deepseek-v4-flash" }],
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				),
-			);
+	it.each([
+		"anthropic",
+		"openrouter",
+		"ollama",
+	])("preserves %s accounting without a Cline lookup", async (providerId) => {
+		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
-
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline",
-				modelId: "deepseek/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(false);
-		await expect(
-			shouldZeroClineFreeModelCost({
-				providerId: "cline",
-				modelId: "deepseek/deepseek-v4-flash",
-				baseUrl: "https://cline.test/api/v1",
-			}),
-		).resolves.toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const shouldZero = await shouldZeroClineFreeModelCost({
+			providerId,
+			modelId: "fixture",
+		});
+		expect(shouldZero).toBe(false);
+		expect(zeroCliUsageCost({ totalCost: 0.1 }, shouldZero)).toEqual({
+			totalCost: 0.1,
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
-
 describe("zeroCliUsageCost", () => {
 	it("zeros total cost while preserving token usage", () => {
 		expect(

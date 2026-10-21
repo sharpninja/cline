@@ -1,3 +1,4 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import { DeleteHookRequest, DeleteHookResponse } from "@shared/proto/cline/file"
 import fs from "fs/promises"
 import { HookDiscoveryCache } from "../../hooks/HookDiscoveryCache"
@@ -22,6 +23,7 @@ export async function deleteHook(
 	}
 
 	// Delete the hook file
+	validateStoragePath(hookPath)
 	await fs.unlink(hookPath)
 
 	// Invalidate hook discovery cache

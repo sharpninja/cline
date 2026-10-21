@@ -1,0 +1,66 @@
+{
+  "name": "@cline/qbrain-governance",
+  "version": "0.0.1",
+  "private": true,
+  "internal": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./hub-namespace": {
+      "types": "./dist/hub-namespace.d.ts",
+      "import": "./dist/hub-namespace.js"
+    },
+    "./host-storage": {
+      "types": "./dist/host-storage.d.ts",
+      "import": "./dist/host-storage.js"
+    },
+    "./storage-policy": {
+      "types": "./dist/storage-policy.d.ts",
+      "import": "./dist/storage-policy.js"
+    },
+    "./cloud-policy": {
+      "types": "./dist/cloud-policy.d.ts",
+      "import": "./dist/cloud-policy.js",
+      "require": "./dist/cloud-policy.cjs"
+    }
+  },
+  "dependencies": {
+    "@cline/shared": "workspace:*",
+    "ignore": "^7.0.3",
+    "minimatch": "^10.2.6",
+    "tar": "7.5.22",
+    "@qbrainai/qbrain-ai-plugin-core": "file:vendor/qbrainai-qbrain-ai-plugin-core.tgz"
+  },
+  "devDependencies": {
+    "@cline/agents": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun bun.mts && bun tsc -p tsconfig.build.json",
+    "typecheck": "bun tsc -p tsconfig.dev.json --noEmit",
+    "test": "vitest run src"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "cloud-policy": [
+        "./dist/cloud-policy.d.ts"
+      ],
+      "host-storage": [
+        "./dist/host-storage.d.ts"
+      ],
+      "hub-namespace": [
+        "./dist/hub-namespace.d.ts"
+      ],
+      "storage-policy": [
+        "./dist/storage-policy.d.ts"
+      ]
+    }
+  }
+}

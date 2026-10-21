@@ -1,3 +1,5 @@
+import "./host-bootstrap";
+
 import { CORE_BUILD_VERSION } from "@cline/core";
 import { isNonLocalBindHost } from "./options";
 import {
@@ -27,7 +29,7 @@ import {
 	syncHubClientsAndSessions,
 	syncHubHealth,
 } from "./server/hub";
-import { fetchMarketplaceCatalog } from "./server/marketplace";
+import { CLINE_MARKETPLACE_DISABLED_MESSAGE } from "./server/marketplace";
 import {
 	loadModels,
 	runProviderOAuthLogin,
@@ -134,19 +136,10 @@ export async function startClineHubDashboardServer(): Promise<ClineHubDashboardS
 				return createJsonResponse(browserConfig);
 			}
 			if (url.pathname === "/api/marketplace/catalog") {
-				try {
-					return createJsonResponse(await fetchMarketplaceCatalog());
-				} catch (error) {
-					return createJsonResponse(
-						{
-							error:
-								error instanceof Error
-									? error.message
-									: "Failed to fetch marketplace catalog",
-						},
-						502,
-					);
-				}
+				return createJsonResponse(
+					{ error: CLINE_MARKETPLACE_DISABLED_MESSAGE },
+					403,
+				);
 			}
 			return assets.serve(url.pathname);
 		},

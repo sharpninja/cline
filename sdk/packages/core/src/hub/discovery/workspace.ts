@@ -4,11 +4,11 @@ import {
 	type HubOwnerContext,
 	resolveClineDataDir,
 	resolveHubBuildId,
+	resolveHubDiscoveryPath,
 	resolveHubOwnerContext,
 } from ".";
 
 const DEFAULT_SHARED_HUB_OWNER_LABEL = "shared:cline";
-const HUB_DISCOVERY_ENV = "CLINE_HUB_DISCOVERY_PATH";
 const PRODUCTION_HUB_OWNER_ID = "hub-production";
 
 export function resolveWorkspaceHubOwnerContext(
@@ -38,8 +38,8 @@ export function resolveSharedHubOwnerContext(
 export function resolveProductionHubOwnerContext(): HubOwnerContext {
 	return {
 		ownerId: PRODUCTION_HUB_OWNER_ID,
-		discoveryPath:
-			process.env[HUB_DISCOVERY_ENV]?.trim() ||
+		discoveryPath: resolveHubDiscoveryPath(
 			join(resolveClineDataDir(), "locks", "hub", "production.json"),
+		),
 	};
 }

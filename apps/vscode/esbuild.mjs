@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import * as esbuild from "esbuild"
+import qbrainBuildDefines from "../qbrain-build-defines.json" with { type: "json" }
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -97,50 +98,12 @@ if (production) {
 	// IS_DEV is always disable in production builds.
 	buildEnvVars["process.env.IS_DEV"] = "false"
 }
-// Set the environment and telemetry env vars. The API key env vars need to be populated in the GitHub
-// workflows from the secrets.
+// Keep the unrelated environment label separate from disabled service configuration.
 if (process.env.CLINE_ENVIRONMENT) {
 	buildEnvVars["process.env.CLINE_ENVIRONMENT"] = JSON.stringify(process.env.CLINE_ENVIRONMENT)
 }
-if (process.env.TELEMETRY_SERVICE_API_KEY) {
-	buildEnvVars["process.env.TELEMETRY_SERVICE_API_KEY"] = JSON.stringify(process.env.TELEMETRY_SERVICE_API_KEY)
-}
-if (process.env.ERROR_SERVICE_API_KEY) {
-	buildEnvVars["process.env.ERROR_SERVICE_API_KEY"] = JSON.stringify(process.env.ERROR_SERVICE_API_KEY)
-}
-
-// OpenTelemetry configuration (injected at build time from GitHub secrets)
-// These provide production defaults that can be overridden at runtime via environment variables
-if (process.env.OTEL_TELEMETRY_ENABLED) {
-	buildEnvVars["process.env.OTEL_TELEMETRY_ENABLED"] = JSON.stringify(process.env.OTEL_TELEMETRY_ENABLED)
-}
-if (process.env.OTEL_LOGS_EXPORTER) {
-	buildEnvVars["process.env.OTEL_LOGS_EXPORTER"] = JSON.stringify(process.env.OTEL_LOGS_EXPORTER)
-}
-if (process.env.OTEL_METRICS_EXPORTER) {
-	buildEnvVars["process.env.OTEL_METRICS_EXPORTER"] = JSON.stringify(process.env.OTEL_METRICS_EXPORTER)
-}
-if (process.env.OTEL_TRACES_EXPORTER) {
-	buildEnvVars["process.env.OTEL_TRACES_EXPORTER"] = JSON.stringify(process.env.OTEL_TRACES_EXPORTER)
-}
-if (process.env.CLINE_TRACE_SAMPLE_PERCENT) {
-	buildEnvVars["process.env.CLINE_TRACE_SAMPLE_PERCENT"] = JSON.stringify(process.env.CLINE_TRACE_SAMPLE_PERCENT)
-}
-if (process.env.CLINE_TRACE_RECORD_CONTENT) {
-	buildEnvVars["process.env.CLINE_TRACE_RECORD_CONTENT"] = JSON.stringify(process.env.CLINE_TRACE_RECORD_CONTENT)
-}
-if (process.env.OTEL_EXPORTER_OTLP_PROTOCOL) {
-	buildEnvVars["process.env.OTEL_EXPORTER_OTLP_PROTOCOL"] = JSON.stringify(process.env.OTEL_EXPORTER_OTLP_PROTOCOL)
-}
-if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
-	buildEnvVars["process.env.OTEL_EXPORTER_OTLP_ENDPOINT"] = JSON.stringify(process.env.OTEL_EXPORTER_OTLP_ENDPOINT)
-}
-if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
-	buildEnvVars["process.env.OTEL_EXPORTER_OTLP_HEADERS"] = JSON.stringify(process.env.OTEL_EXPORTER_OTLP_HEADERS)
-}
-if (process.env.OTEL_METRIC_EXPORT_INTERVAL) {
-	buildEnvVars["process.env.OTEL_METRIC_EXPORT_INTERVAL"] = JSON.stringify(process.env.OTEL_METRIC_EXPORT_INTERVAL)
-}
+// Product policy cannot be enabled by build-time environment values.
+Object.assign(buildEnvVars, qbrainBuildDefines)
 // Base configuration shared between extension and standalone builds
 const baseConfig = {
 	bundle: true,

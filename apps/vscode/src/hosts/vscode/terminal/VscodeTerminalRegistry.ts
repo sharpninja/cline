@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import { ExtensionRegistryInfo } from "@/registry"
 import { Logger } from "@/shared/services/Logger"
 
 export interface TerminalInfo {
@@ -26,7 +27,7 @@ export class TerminalRegistry {
 		const terminalOptions: vscode.TerminalOptions = {
 			cwd,
 			name: "Cline",
-			iconPath: new vscode.ThemeIcon("cline-icon"),
+			iconPath: new vscode.ThemeIcon(ExtensionRegistryInfo.icon),
 			env: {
 				CLINE_ACTIVE: "true",
 				// Override $SHELL to match the selected shell profile so that

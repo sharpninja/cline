@@ -49,6 +49,13 @@ export function createVscodeSdkTelemetryHandle(options: CreateVscodeSdkTelemetry
 					...options.metadata,
 				},
 			}),
+			// Product policy applies after legacy defaults, including source-mode env.
+			enabled: false,
+			logsExporter: "none",
+			metricsExporter: "none",
+			tracesExporter: "none",
+			otlpEndpoint: undefined,
+			otlpHeaders: undefined,
 			commonProperties: getRolloutTelemetryMetadata(),
 			distinctId: getDistinctId() || undefined,
 			// telemetry.provider_created is otherwise captured during construction,

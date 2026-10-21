@@ -431,7 +431,7 @@ describe("Code sidecar runtime capabilities", () => {
 		}
 	});
 
-	it("includes a cold cloud session in title search", async () => {
+	it("does not discover a cold cloud session even with the old environment override", async () => {
 		const { handleCommand } = await import("./commands");
 		const { createSidecarContext } = await import("./context");
 		const ctx = createSidecarContext("/workspace/project");
@@ -454,12 +454,11 @@ describe("Code sidecar runtime capabilities", () => {
 			query: "UNIQUE-CLOUD-TITLE",
 		})) as Array<{ sessionId: string }>;
 
-		expect(results).toEqual([
-			expect.objectContaining({ sessionId: "cloud-cold" }),
-		]);
+		expect(results).toEqual([]);
+		expect(list).not.toHaveBeenCalled();
 	});
 
-	it("appends unique cloud hits after indexed local hits and applies the limit", async () => {
+	it("preserves indexed local ordering and limits without appending cloud hits", async () => {
 		const { handleCommand } = await import("./commands");
 		const { createSidecarContext } = await import("./context");
 		const ctx = createSidecarContext("/workspace/project");
@@ -517,7 +516,16 @@ describe("Code sidecar runtime capabilities", () => {
 			["local-1", "local-1:0"],
 			["shared", "shared:0"],
 			["shared", "shared:1"],
-			["cloud-2", "cloud-2:metadata"],
+		]);
+		const limited = (await handleCommand(ctx, "search_sessions", {
+			query: "match",
+			limit: 2,
+		})) as Array<{ sessionId: string; documentId: string }>;
+		expect(
+			limited.map(({ sessionId, documentId }) => [sessionId, documentId]),
+		).toEqual([
+			["local-1", "local-1:0"],
+			["shared", "shared:0"],
 		]);
 	});
 
@@ -563,38 +571,39 @@ describe("Code sidecar runtime capabilities", () => {
 		}
 	});
 
-	it("does not append results from a manager replaced during search", async () => {
+	it("does not invoke cloud discovery while its manager changes during local search", async () => {
 		const { handleCommand } = await import("./commands");
 		const { createSidecarContext } = await import("./context");
 		const ctx = createSidecarContext("/workspace/project");
-		let release!: (records: CloudSessionRecord[]) => void;
+		let release!: () => void;
+		const pendingReply = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const list = vi.fn(async () => [
+			cloudSearchRecord("stale-cloud", "stale cloud"),
+		]);
 		ctx.runtimeBindings.set("local", {
 			environmentId: "local",
 			kind: "local",
 			workspaceRoot: "/workspace/project",
 			hubClient: {
-				command: vi.fn(async () => ({ ok: true, payload: { hits: [] } })),
+				command: vi.fn(async () => {
+					await pendingReply;
+					return { ok: true, payload: { hits: [] } };
+				}),
 			} as never,
 			sessionManager: { list: vi.fn(async () => []) } as never,
 			unsubscribeSessionEvents: () => {},
 		});
-		ctx.cloudSessionManager = createSearchCloudManager(
-			ctx,
-			() =>
-				new Promise((resolve) => {
-					release = resolve;
-				}),
-		);
+		ctx.cloudSessionManager = createSearchCloudManager(ctx, list);
 		const pending = handleCommand(ctx, "search_sessions", {
 			query: "stale cloud",
-		}) as Promise<unknown[]>;
-		await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+		});
 		ctx.cloudSessionManager = null;
-		release([cloudSearchRecord("stale-cloud", "stale cloud")]);
-
+		release();
 		await expect(pending).resolves.toEqual([]);
+		expect(list).not.toHaveBeenCalled();
 	});
-
 	it("forwards raw hub tool updates to attached desktop sessions", async () => {
 		const { createSidecarContext, handleHubLiveEvent } = await import(
 			"./context"

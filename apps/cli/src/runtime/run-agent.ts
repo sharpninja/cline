@@ -17,6 +17,7 @@ import {
 	submitAndExitInTerminal,
 } from "../utils/approval";
 import { formatCliErrorMessage } from "../utils/cline-pass-errors";
+import { assertDirectProvider } from "../utils/cloud-policy";
 import { handleEvent, handleTeamEvent } from "../utils/events";
 import {
 	shouldZeroClineFreeModelCost,
@@ -143,6 +144,7 @@ export async function runAgent(
 	// A clean one-shot run should not inherit a stale nonzero process exit code
 	// from lower layers or prior bookkeeping inside the same process.
 	process.exitCode = 0;
+	assertDirectProvider(config.providerId);
 
 	if (config.verbose) {
 		const clineWelcomeLine = await resolveClineWelcomeLine({

@@ -1,3 +1,11 @@
+import { assertDesktopDirectProvider } from "./provider-policy";
+import { clearLegacyProviderCredentials } from "./legacy-provider-credentials";
+import {
+	assertDirectProvider,
+	isClineCloudProvider,
+	rejectClineAccount,
+	requireDirectProvider,
+} from "@cline/qbrain-governance/cloud-policy";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -18,9 +26,8 @@ import {
 	posix,
 	sep,
 } from "node:path";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { promisify } from "node:util";
 import type {
-	ClineAccountActionRequest,
 	CoreSettingsSnapshot,
 	ProviderCapability,
 	ProviderClient,
@@ -32,30 +39,22 @@ import type {
 } from "@cline/core";
 import {
 	addLocalProvider,
-	ClineAccountService,
-	type ClineAccountUser,
-	clearAccountTelemetryIdentity,
 	createConfiguredStreamingTranscriptionSession,
 	createUserInstructionConfigService,
 	ensureCustomProvidersLoaded,
-	executeClineAccountAction,
-	fetchClineRecommendedModels,
 	getCoreBuiltinToolCatalog,
 	getLocalProviderModels,
 	getLocalTranscriptionModels,
 	getProviderAuthHandler,
-	identifyAccount,
 	isModelToolEnabledGlobally,
 	listHookConfigFiles,
 	listLocalProviders,
 	normalizeOAuthProvider,
 	ProviderSettingsManager,
 	parseMcpServerRegistration,
-	persistClineAccountTelemetryIdentity,
 	probeMcpServerConnection,
 	RemoteEnvironmentService,
 	readGlobalSettings,
-	resolveClineAccountTelemetryIdentity,
 	resolveMcpServerRegistration,
 	resolveSessionBackend,
 	resolveAgentConfigSearchPaths as resolveSharedAgentConfigSearchPaths,
@@ -76,7 +75,6 @@ import {
 } from "@cline/core";
 import { resolveAudioTranscriptionRoute } from "@cline/llms";
 import {
-	CLINE_DEFAULT_MODEL_ID,
 	formatSessionSearchPreview,
 	formatSessionSearchTitle,
 	getClineEnvironmentConfig,
@@ -88,19 +86,15 @@ import {
 import { readFileSyncStrippingUtf8Bom } from "@cline/shared/node";
 import { resolveClineDir, resolveMcpSettingsPath } from "@cline/shared/storage";
 import packageJson from "../package.json";
-import { CLINE_ACCOUNT_NOT_AUTHENTICATED_RESULT } from "../webview/lib/cline-account-state";
+
 import { MAX_RECORDED_AUDIO_BYTES } from "../webview/lib/voice-input-limits";
-import { resolveDesktopTelemetryUser } from "./client-context";
-import { resolveFreshClineAuthToken } from "./cline-auth";
+
 import {
 	getCloudSessionManager,
+	isDesktopCloudSession,
 	resetCloudSessionManager,
 } from "./cloud-sessions";
-import {
-	listClineGitHubRepositories,
-	listClineIntegrations,
-	resolveGitHubInstallUrl,
-} from "./commands-integrations";
+
 import {
 	cancelComposioConnect,
 	connectComposioToolkit,
@@ -132,12 +126,11 @@ import {
 } from "./desktop-settings";
 import { writeDiagnosticsReport } from "./diagnostics";
 import {
-	identifyDesktopFeatureFlagsAccount,
 	isCloudAgentsAvailable,
 	isCloudAgentsEnabled,
 	refreshDesktopFeatureFlags,
 } from "./feature-flags";
-import { clearLegacyProviderCredentials } from "./legacy-provider-credentials";
+
 import {
 	installMarketplaceEntryForDesktopCommand,
 	listMarketplaceInstalledEntries,
@@ -497,69 +490,6 @@ function removePathIfExists(
 		recursive: options?.recursive === true,
 	});
 	return true;
-}
-
-function syncAccountContextFromResult(
-	ctx: SidecarContext,
-	manager: ProviderSettingsManager,
-	operation: string,
-	result: unknown,
-): void {
-	if (operation === "fetchMe") {
-		const user = result as ClineAccountUser | undefined;
-		if (user?.id) {
-			const identity = resolveClineAccountTelemetryIdentity(user);
-			ctx.telemetryUser = resolveDesktopTelemetryUser({
-				accountId: identity.id,
-				email: identity.email,
-				organizationId: identity.organizationId,
-			});
-			identifyAccount(ctx.telemetry, identity);
-			persistClineAccountTelemetryIdentity(manager, identity);
-			void identifyDesktopFeatureFlagsAccount(
-				{ id: user.id, email: user.email },
-				{ logger: ctx.logger, telemetry: ctx.telemetry },
-			);
-		}
-		return;
-	}
-}
-
-function syncAccountContextFromSettings(
-	ctx: SidecarContext,
-	manager: ProviderSettingsManager,
-): void {
-	const auth = manager.getProviderSettings("cline")?.auth;
-	const accountId = auth?.accountId?.trim();
-	if (!auth || !accountId) {
-		syncSignedOutAccountContext(ctx);
-		return;
-	}
-	ctx.telemetryUser = resolveDesktopTelemetryUser({
-		accountId,
-		organizationId: auth.organizationId,
-	});
-	identifyAccount(ctx.telemetry, {
-		id: accountId,
-		provider: "cline",
-		organizationId: auth.organizationId,
-		organizationName: auth.organizationName,
-		memberId: auth.memberId,
-	});
-	void identifyDesktopFeatureFlagsAccount(
-		{ id: accountId },
-		{ logger: ctx.logger, telemetry: ctx.telemetry },
-	);
-}
-
-function syncSignedOutAccountContext(ctx: SidecarContext): void {
-	const telemetryUser = resolveDesktopTelemetryUser();
-	ctx.telemetryUser = telemetryUser;
-	clearAccountTelemetryIdentity(ctx.telemetry, telemetryUser.distinctId);
-	void identifyDesktopFeatureFlagsAccount(
-		{},
-		{ logger: ctx.logger, telemetry: ctx.telemetry },
-	);
 }
 
 function mergePersistedSessionRecord(
@@ -1209,11 +1139,39 @@ function asTrimmedStringArray(value: unknown): string[] | undefined {
 	return values.length > 0 ? values : undefined;
 }
 
+function createDirectVoiceSettingsManager(): ProviderSettingsManager {
+	const manager = new ProviderSettingsManager();
+	const readSelection = manager.getVoiceInputSettings.bind(manager);
+	// Configured voice helpers reread the selection. Apply policy on every read,
+	// including changes between diagnostics and execution.
+	manager.getVoiceInputSettings = () => {
+		const selection = readSelection();
+		if (selection) assertDesktopDirectProvider(selection.providerId);
+		return selection;
+	};
+	return manager;
+}
+function readExplicitModelSelection(args?: Record<string, unknown>): {
+	providerId: string;
+	modelId: string;
+} {
+	const providerId = requireDirectProvider(asTrimmedString(args?.provider));
+	assertDesktopDirectProvider(providerId);
+	const modelId = asTrimmedString(args?.model);
+	if (!modelId)
+		throw new Error("Select a model for the configured direct provider.");
+	return { providerId, modelId };
+}
 async function handleRoutineScheduleCommand(
 	ctx: SidecarContext,
 	command: string,
 	args?: Record<string, unknown>,
 ): Promise<unknown> {
+	const modelSelection =
+		command === "create_routine_schedule" ||
+		command === "update_routine_schedule"
+			? readExplicitModelSelection(args)
+			: undefined;
 	const hubClient = await ensureSharedHubClient(ctx);
 	const clientCommand = async (
 		hubCommand: string,
@@ -1302,10 +1260,7 @@ async function handleRoutineScheduleCommand(
 			name,
 			...timing,
 			prompt,
-			modelSelection: {
-				providerId: asTrimmedString(args?.provider) ?? "cline",
-				modelId: asTrimmedString(args?.model) ?? CLINE_DEFAULT_MODEL_ID,
-			},
+			modelSelection,
 			mode: readHubScheduleMode(args, "yolo"),
 			workspaceRoot,
 			cwd: asTrimmedString(args?.cwd),
@@ -1336,10 +1291,7 @@ async function handleRoutineScheduleCommand(
 			name,
 			...timing,
 			prompt,
-			modelSelection: {
-				providerId: asTrimmedString(args?.provider) ?? "cline",
-				modelId: asTrimmedString(args?.model) ?? CLINE_DEFAULT_MODEL_ID,
-			},
+			modelSelection,
 			...(mode === undefined ? {} : { mode }),
 			workspaceRoot,
 			cwd: asTrimmedString(args?.cwd) ?? null,
@@ -2117,13 +2069,10 @@ export async function handleCommand(
 	// ── Session data reading ──────────────────────────────────────────
 	if (command === "read_session_messages") {
 		const sessionId = String(args?.sessionId ?? "").trim();
-		const cloud = getCloudSessionManager(ctx);
+		if (isDesktopCloudSession(ctx, sessionId, requestedEnvironmentId(args)))
+			return rejectClineAccount();
 		const maxMessages =
 			typeof args?.maxMessages === "number" ? args.maxMessages : 800;
-		if (cloud.isCloudSession(sessionId)) {
-			const messages = await cloud.readMessages(sessionId);
-			return await readSessionMessages(ctx, sessionId, maxMessages, messages);
-		}
 		const binding = await getCommandSessionBinding(ctx, sessionId, args);
 		const remoteMessages =
 			binding?.kind === "ssh"
@@ -2480,25 +2429,8 @@ export async function handleCommand(
 	if (command === "get_discovered_session") {
 		const sessionId = String(args?.sessionId ?? args?.session_id ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
-		const cloud = getCloudSessionManager(ctx);
-		if (cloud.isCloudSession(sessionId)) {
-			// The active-scope list can omit a session created under another
-			// org scope; fall back to revalidating the cached record by id so
-			// the session stays openable, and to the raw cache when the
-			// account APIs are unavailable entirely.
-			try {
-				const listed = (await cloud.listForDiscovery()).find(
-					(session) => session.sessionId === sessionId,
-				);
-				return (
-					listed ??
-					(await cloud.getCrossScopeDiscoveryRecord(sessionId)) ??
-					null
-				);
-			} catch {
-				return cloud.getCachedDiscoveryRecord(sessionId) ?? null;
-			}
-		}
+		if (isDesktopCloudSession(ctx, sessionId, requestedEnvironmentId(args)))
+			return rejectClineAccount();
 		return (
 			(await getSessionFromSidecarManager(
 				ctx,
@@ -2535,16 +2467,11 @@ export async function handleCommand(
 		if (requests.length === 0) {
 			throw new Error("at least one { tool, sourceId } selection is required");
 		}
+		// Imported history resumes only on the operator's explicit direct selection.
+		const { providerId: provider, modelId: model } =
+			readExplicitModelSelection(args);
 		const backend = await resolveSessionBackend({ backendMode: "local" });
 		const importer = new SessionImportService(backend);
-		// Opening a history session resumes on the row's provider/model, so the
-		// UI passes what a new chat would run on; the source tool's own
-		// provider/model stay in metadata.importedFrom.
-		// Never let the source tool's provider become the resume target: when
-		// the caller sends no selection, use the app default like other
-		// server-started sessions do.
-		const provider = asTrimmedString(args?.provider) ?? "cline";
-		const model = asTrimmedString(args?.model) ?? CLINE_DEFAULT_MODEL_ID;
 		const results = await importer.importMany(
 			requests,
 			(result, index) => {
@@ -2562,12 +2489,8 @@ export async function handleCommand(
 		const sessionId = String(args?.sessionId ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
 		const title = normalizeSessionTitle(String(args?.title ?? ""));
-		const cloud = getCloudSessionManager(ctx);
-		if (cloud.isCloudSession(sessionId)) {
-			if (!title) throw new Error("title is required");
-			await cloud.updateTitle(sessionId, title);
-			return true;
-		}
+		if (isDesktopCloudSession(ctx, sessionId, requestedEnvironmentId(args)))
+			return rejectClineAccount();
 		const binding = await getCommandSessionBinding(ctx, sessionId, args);
 		if (!binding) throw new Error(`Session ${sessionId} not found`);
 		const result = await binding.sessionManager.update(sessionId, { title });
@@ -2625,11 +2548,8 @@ export async function handleCommand(
 	if (command === "delete_chat_session" || command === "delete_cli_session") {
 		const sessionId = String(args?.sessionId ?? args?.session_id ?? "").trim();
 		if (!sessionId) throw new Error("session id is required");
-		const cloud = getCloudSessionManager(ctx);
-		if (cloud.isCloudSession(sessionId)) {
-			await cloud.delete(sessionId);
-			return true;
-		}
+		if (isDesktopCloudSession(ctx, sessionId, requestedEnvironmentId(args)))
+			return rejectClineAccount();
 		ctx.logger?.log("Deleting desktop chat session", { command, sessionId });
 		const store = new SqliteSessionStore();
 		const row = store.get(sessionId);
@@ -2783,74 +2703,9 @@ export async function handleCommand(
 	}
 
 	// ── Cline account ──────────────────────────────────────────────────
-	if (command === "cline_account") {
-		const operation = String(args?.operation ?? "").trim();
-		if (!operation) throw new Error("operation is required");
-		const manager = new ProviderSettingsManager();
-		// Signed out is an expected state, not a command failure: resolve the
-		// token up front and return a typed result the webview can act on
-		// instead of letting the account service throw a generic error that
-		// would be captured as error telemetry and shown raw to the user.
-		const authToken = await resolveFreshClineAuthToken(manager, ctx);
-		if (!authToken) {
-			// Backstop for credentials that go away without a settings write —
-			// an expired or server-revoked token. Explicit sign-out is handled
-			// at its source in `save_provider_settings`; this catches the rest
-			// so a stale account never keeps serving its rollout cohort.
-			syncSignedOutAccountContext(ctx);
-			return CLINE_ACCOUNT_NOT_AUTHENTICATED_RESULT;
-		}
-		const settings = manager.getProviderSettings("cline");
-		const accountService = new ClineAccountService({
-			apiBaseUrl:
-				settings?.baseUrl?.trim() || getClineEnvironmentConfig().apiBaseUrl,
-			getAuthToken: async () => authToken,
-		});
-		const result = await executeClineAccountAction(
-			args as ClineAccountActionRequest,
-			accountService,
-		);
-		if (operation === "switchAccount") {
-			await resetCloudSessionManager(ctx);
-			// The sidebar must re-scope immediately (personal ⇄ org), not on
-			// the next 12s poll.
-			broadcastEvent(ctx, "cloud_sessions_changed", {});
-		}
-		syncAccountContextFromResult(ctx, manager, operation, result);
-		return result;
+	if (command === "cline_account" || command === "cline_integrations") {
+		return rejectClineAccount();
 	}
-
-	// ── Cline integrations (GitHub App) ────────────────────────────────
-	if (command === "cline_integrations") {
-		const operation = String(args?.operation ?? "").trim();
-		if (!operation) throw new Error("operation is required");
-		const manager = new ProviderSettingsManager();
-
-		const authToken = await resolveFreshClineAuthToken(manager, ctx);
-		if (!authToken) {
-			return CLINE_ACCOUNT_NOT_AUTHENTICATED_RESULT;
-		}
-		const settings = manager.getProviderSettings("cline");
-		const environment = getClineEnvironmentConfig();
-		const requestOptions = {
-			apiBaseUrl: settings?.baseUrl?.trim() || environment.apiBaseUrl,
-			appBaseUrl: environment.appBaseUrl,
-			authToken,
-		};
-		switch (operation) {
-			case "list":
-				return await listClineIntegrations(requestOptions);
-			case "listGitHubRepositories":
-				return await listClineGitHubRepositories(requestOptions);
-			case "githubInstallUrl":
-				return await resolveGitHubInstallUrl(requestOptions);
-			default:
-				throw new Error(
-					`Unsupported Cline integrations operation: ${operation}`,
-				);
-		}
-	}
-
 	// ── Composio connectors (Gmail / Google Calendar / GitHub / catalog) ─
 	if (command === "composio_integrations") {
 		const operation = String(args?.operation ?? "").trim();
@@ -2897,36 +2752,38 @@ export async function handleCommand(
 	if (command === "list_provider_catalog") {
 		const manager = new ProviderSettingsManager();
 		await ensureCustomProvidersLoaded(manager);
-		return await listLocalProviders(manager, { isClinePassEnabled: true });
+		return await listLocalProviders(manager, {
+			isClinePassEnabled: false,
+			includeProvider: (id) =>
+				!isClineCloudProvider(id) &&
+				!isClineCloudProvider(
+					getProviderAuthHandler(id)?.storageProviderId ?? id,
+				),
+		});
 	}
 	if (command === "list_transcription_models") {
-		const manager = new ProviderSettingsManager();
 		const providerId = String(args?.provider ?? "").trim();
+		assertDesktopDirectProvider(providerId);
+		const manager = new ProviderSettingsManager();
 		return getLocalTranscriptionModels(
 			providerId,
 			manager.getProviderConfig(providerId, { includeKnownModels: false }),
 		);
 	}
 	if (command === "list_provider_models") {
-		const manager = new ProviderSettingsManager();
 		const providerId = String(args?.provider ?? "").trim();
-		const includeCloudModels =
-			providerId === "cline" &&
-			args?.includeCloudModels === true &&
-			isCloudAgentsEnabled();
+		assertDesktopDirectProvider(providerId);
+		const manager = new ProviderSettingsManager();
 		return await getLocalProviderModels(
 			providerId,
 			manager.getProviderConfig(providerId, { includeKnownModels: false }),
-			{ loadLatest: includeCloudModels },
 		);
 	}
 	if (command === "list_cline_recommended_models") {
-		// Tiered picker data (recommended / free / clinePass) with
-		// display-ready names; falls back to a bundled list offline.
-		return await fetchClineRecommendedModels();
+		return rejectClineAccount();
 	}
 	if (command === "create_streaming_transcription_session") {
-		const manager = new ProviderSettingsManager();
+		const manager = createDirectVoiceSettingsManager();
 		const selection = manager.getVoiceInputSettings();
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
@@ -2994,7 +2851,7 @@ export async function handleCommand(
 				`recorded audio exceeds the ${MAX_RECORDED_AUDIO_BYTES} byte limit`,
 			);
 		}
-		const manager = new ProviderSettingsManager();
+		const manager = createDirectVoiceSettingsManager();
 		const selection = manager.getVoiceInputSettings();
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
@@ -3048,6 +2905,7 @@ export async function handleCommand(
 				"voice input provider and model must both be set or both be cleared",
 			);
 		}
+		assertDesktopDirectProvider(providerId);
 		const manager = new ProviderSettingsManager();
 		const result = await saveVoiceInputSettings(
 			manager,
@@ -3061,14 +2919,12 @@ export async function handleCommand(
 		return result;
 	}
 	if (command === "save_provider_settings") {
-		const manager = new ProviderSettingsManager();
 		const providerId = String(args?.provider ?? "").trim();
+		assertDirectProvider(providerId);
 		const storageProviderId =
 			getProviderAuthHandler(providerId)?.storageProviderId ?? providerId;
-		const previous =
-			storageProviderId === "cline"
-				? manager.getProviderSettings(storageProviderId)
-				: undefined;
+		assertDirectProvider(storageProviderId);
+		const manager = new ProviderSettingsManager();
 		const saved = await saveLocalProviderSettings(manager, {
 			...readProviderSettingsUpdate(args),
 			providerId,
@@ -3076,42 +2932,21 @@ export async function handleCommand(
 			apiKey: typeof args?.api_key === "string" ? args.api_key : undefined,
 			baseUrl: typeof args?.base_url === "string" ? args.base_url : undefined,
 		});
+		// Explicitly disabling a direct provider must not let private legacy
+		// credentials restore it on the next settings read.
 		if (!saved.enabled) {
-			// Cline Pass keeps its credentials under "cline", so removing only
-			// its own entry would leave the account signed in.
 			if (storageProviderId !== saved.providerId) {
 				await saveLocalProviderSettings(manager, {
 					providerId: storageProviderId,
 					enabled: false,
 				});
 			}
-			// Removing a providers.json entry lets the legacy import restore it
-			// from the extension's secrets.json on the next command unless those
-			// credentials go too. A failed write throws so the webview reports
-			// the sign-out as failed and resyncs.
 			clearLegacyProviderCredentials(storageProviderId);
-		}
-		if (storageProviderId === "cline") {
-			const current = manager.getProviderSettings(storageProviderId);
-			// Ordinary provider preferences must not interrupt cloud sessions.
-			if (
-				previous?.apiKey !== current?.apiKey ||
-				!isDeepStrictEqual(previous?.auth, current?.auth)
-			) {
-				await resetCloudSessionManager(ctx);
-				broadcastEvent(ctx, "cloud_sessions_changed", {});
-			}
-		}
-		// Sign-out is a `save_provider_settings` that blanks the cline auth block
-		// (see signOut in webview settings/account-view.tsx), so this is the
-		// authoritative signal — it fires the moment credentials are cleared
-		// rather than waiting for the next account fetch.
-		if (saved.providerId === "cline" || saved.providerId === "cline-pass") {
-			syncAccountContextFromSettings(ctx, manager);
 		}
 		return saved;
 	}
 	if (command === "add_provider") {
+		assertDesktopDirectProvider(String(args?.provider_id ?? ""));
 		const manager = new ProviderSettingsManager();
 		await ensureCustomProvidersLoaded(manager);
 		return await addLocalProvider(manager, {
@@ -3151,6 +2986,7 @@ export async function handleCommand(
 	}
 	if (command === "update_provider_models") {
 		const providerId = String(args?.provider ?? "").trim();
+		assertDesktopDirectProvider(providerId);
 		const manager = new ProviderSettingsManager();
 		await ensureCustomProvidersLoaded(manager);
 		return await updateLocalProvider(manager, {
@@ -3161,6 +2997,7 @@ export async function handleCommand(
 		});
 	}
 	if (command === "run_provider_oauth_login") {
+		assertDirectProvider(String(args?.provider ?? ""));
 		const providerId = normalizeOAuthProvider(String(args?.provider ?? ""));
 		const manager = new ProviderSettingsManager();
 		const result = await runCancellableProviderOAuthLogin(
@@ -3186,13 +3023,6 @@ export async function handleCommand(
 					}),
 			},
 		);
-		const storageProviderId =
-			getProviderAuthHandler(providerId)?.storageProviderId ?? providerId;
-		if (storageProviderId === "cline") {
-			// Re-scope cached cloud sessions after sign-in.
-			await resetCloudSessionManager(ctx);
-			broadcastEvent(ctx, "cloud_sessions_changed", {});
-		}
 		return result;
 	}
 	if (command === "cancel_provider_oauth_login") {

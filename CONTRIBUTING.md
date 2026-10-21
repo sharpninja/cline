@@ -75,10 +75,11 @@ We also welcome contributions to our [documentation](https://github.com/cline/cl
 2. **Local Development**
     - cd into the vscode extension, `cd apps/vscode`
     - Run `bun run install:all` to install dependencies
-    - Run `bun run protos` to generate Protocol Buffer files (required before first build)
+    - Run `bun run protos` to generate Protocol Buffer files before the first build and after `.proto` changes. Generation is an explicit preparation step; builds, type checks, and tests consume its output without regenerating or formatting source files.
     - Run `bun run test` to run tests locally
     - Run → Start Debugging or `>Debug: Select and Start Debugging` and wait for a new VS Code instance to open
-    - **Terminal Workflow**: Use `bun run dev` (generates protos + runs watch mode) or `bun run watch` (if protos already generated)
+    - **Terminal Workflow**: After generating protos, use `bun run dev` or `bun run watch` to run watch mode.
+    - `bun run lint:proto` requires PowerShell 7 and checks Buf lint, formatting differences, and RPC names without rewriting files. Use `bun run format:generated` explicitly when generated-source formatting is intended.
     - Before submitting PR, run `bun run format:fix` to format your code
 
 3. **Linux-specific Setup**

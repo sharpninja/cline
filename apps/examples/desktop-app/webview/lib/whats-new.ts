@@ -1,6 +1,6 @@
 import { WHATS_NEW_RELEASES, type WhatsNewRelease } from "./whats-new-content";
 
-export const WHATS_NEW_STORAGE_KEY = "cline.code.whats-new.v1";
+export const WHATS_NEW_STORAGE_KEY = "cline-qb.code.whats-new.v1";
 
 export function latestWhatsNew(): WhatsNewRelease | null {
 	return WHATS_NEW_RELEASES[0] ?? null;

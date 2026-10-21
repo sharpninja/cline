@@ -9,7 +9,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
-import { BannerService } from "@/services/banner/BannerService"
+
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { getExtensionVariant } from "@/services/telemetry/rollout-metadata"
@@ -47,7 +47,7 @@ export async function getStateToPostToWebview(controller: {
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
-	const userInfo = stateManager.getGlobalStateKey("userInfo")
+	const userInfo = undefined // Legacy hosted identities never become product auth state.
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
 	const mcpDisplayMode = stateManager.getGlobalStateKey("mcpDisplayMode")
 	const telemetrySetting = stateManager.getGlobalSettingsKey("telemetrySetting")
@@ -98,8 +98,8 @@ export async function getStateToPostToWebview(controller: {
 	const version = ExtensionRegistryInfo.version
 	const clineConfig = ClineEnv.config()
 	const environment = clineConfig.environment
-	const banners = BannerService.get().getActiveBanners() ?? []
-	const welcomeBanners = BannerService.get().getWelcomeBanners() ?? []
+	const banners: ExtensionState["banners"] = []
+	const welcomeBanners: ExtensionState["welcomeBanners"] = []
 
 	// Check OpenAI Codex authentication status
 	let openAiCodexIsAuthenticated = false

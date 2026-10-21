@@ -376,11 +376,11 @@ describe("Telemetry system is abstracted and can easily switch between providers
 
 			const defaultConfigs = TelemetryProviderFactory.getDefaultConfigs()
 
-			// Should include at least PostHog
+			// A local provider is retained for compatible callers
 			assert.ok(defaultConfigs.length > 0, "Should return at least one configuration")
 			assert.ok(
-				defaultConfigs.some((c) => c.type === "posthog"),
-				"Should include PostHog configuration",
+				defaultConfigs.every((c) => c.type === "no-op"),
+				"Only local no-op providers are allowed",
 			)
 
 			// Restore the stubs
@@ -405,16 +405,16 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			isPostHogConfigValidStub.restore()
 		})
 
-		it("should include PostHog config when NOT in selfHosted mode and config is valid", () => {
+		it("excludes PostHog even outside selfHosted mode with valid legacy config", () => {
 			// Stub ClineEndpoint.isSelfHosted() to return false (normal mode)
 			const isSelfHostedStub = sinon.stub(ClineEndpoint, "isSelfHosted").returns(false)
 			const isPostHogConfigValidStub = sinon.stub(posthogConfigModule, "isPostHogConfigValid").returns(true)
 
 			const configs = TelemetryProviderFactory.getDefaultConfigs()
 
-			// Should include PostHog when NOT in selfHosted mode and config is valid
+			// cline-qb excludes hosted telemetry even with valid legacy configuration
 			const hasPosthog = configs.some((c) => c.type === "posthog")
-			assert.strictEqual(hasPosthog, true, "Should include PostHog configuration when not in selfHosted mode")
+			assert.strictEqual(hasPosthog, false, "No hosted telemetry in any mode")
 
 			// Restore the stubs
 			isSelfHostedStub.restore()
@@ -447,7 +447,7 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			isPostHogConfigValidStub.restore()
 		})
 
-		it("should include build-time OTEL config when NOT in selfHosted mode", () => {
+		it("excludes build-time OTEL in every mode", () => {
 			// Stub ClineEndpoint.isSelfHosted() to return false (normal mode)
 			const isSelfHostedStub = sinon.stub(ClineEndpoint, "isSelfHosted").returns(false)
 			const getValidOtelConfigStub = sinon.stub(otelConfigModule, "getValidOpenTelemetryConfig").returns({
@@ -461,9 +461,9 @@ describe("Telemetry system is abstracted and can easily switch between providers
 
 			const configs = TelemetryProviderFactory.getDefaultConfigs()
 
-			// Should include build-time OTEL when NOT in selfHosted mode
+			// Build-time settings cannot override the product policy
 			const hasOtel = configs.some((c) => c.type === "opentelemetry")
-			assert.strictEqual(hasOtel, true, "Should include build-time OTEL configuration when not in selfHosted mode")
+			assert.strictEqual(hasOtel, false, "Build-time OTEL cannot reactivate telemetry")
 
 			// Restore the stubs
 			isSelfHostedStub.restore()
@@ -472,7 +472,7 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			isPostHogConfigValidStub.restore()
 		})
 
-		it("should STILL include runtime env OTEL config even in selfHosted mode", () => {
+		it("excludes runtime env OTEL even in selfHosted mode", () => {
 			// Stub ClineEndpoint.isSelfHosted() to return true (selfHosted mode)
 			const isSelfHostedStub = sinon.stub(ClineEndpoint, "isSelfHosted").returns(true)
 			// Disable build-time OTEL
@@ -488,17 +488,13 @@ describe("Telemetry system is abstracted and can easily switch between providers
 
 			const configs = TelemetryProviderFactory.getDefaultConfigs()
 
-			// Should STILL include runtime env OTEL even in selfHosted mode (user explicitly enabled it)
+			// Runtime settings cannot override the product policy
 			const hasOtel = configs.some((c) => c.type === "opentelemetry")
-			assert.strictEqual(hasOtel, true, "Should include runtime env OTEL configuration even in selfHosted mode")
+			assert.strictEqual(hasOtel, false, "Runtime OTEL cannot reactivate telemetry")
 
-			// Verify it has bypassUserSettings: true
+			// No bypass provider exists
 			const otelConfig = configs.find((c) => c.type === "opentelemetry")
-			assert.strictEqual(
-				(otelConfig as any).bypassUserSettings,
-				true,
-				"Runtime env OTEL should have bypassUserSettings: true",
-			)
+			assert.strictEqual(otelConfig, undefined, "No bypass provider may be installed")
 
 			// Restore the stubs
 			isSelfHostedStub.restore()

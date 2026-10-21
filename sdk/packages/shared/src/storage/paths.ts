@@ -19,6 +19,16 @@ import {
 } from "node:path";
 import type { PluginManifest } from "..";
 import {
+	getStorageNamespace,
+	type StoragePathKind,
+	validateStoragePath,
+} from "./namespace";
+
+function hostJoin(...paths: string[]): string {
+	return validateStoragePath(join(...paths));
+}
+
+import {
 	CLINE_CHAT_WORKSPACE_DIRECTORY_NAME,
 	CLINE_WORKSPACES_DIRECTORY_NAME,
 } from "./chat-workspace-paths";
@@ -71,7 +81,7 @@ export const AGENT_PLUGIN_MANIFEST_FILE_NAME = "plugin.json";
  * the directory shares the session store's lifecycle and env overrides.
  */
 export function resolveChatWorkspacePath(): string {
-	return join(
+	return hostJoin(
 		resolveClineDataDir(),
 		CLINE_WORKSPACES_DIRECTORY_NAME,
 		CLINE_CHAT_WORKSPACE_DIRECTORY_NAME,
@@ -128,11 +138,27 @@ export function setHomeDirIfUnset(dir: string) {
 let CLINE_DIR: string | undefined;
 let CLINE_DIR_SET_EXPLICITLY = false;
 
+function namespacedPath(
+	kind: StoragePathKind,
+	rootOverride = CLINE_DIR,
+): string | undefined {
+	const namespace = getStorageNamespace();
+	if (!namespace) return undefined;
+	const result = namespace.resolvePath(kind, {
+		homeDir: HOME_DIR,
+		rootOverride,
+	});
+	if (typeof result !== "string" || !result.trim())
+		throw new Error(`Host storage policy did not resolve ${kind}.`);
+	return result;
+}
+
 export function setClineDir(dir: string): void {
 	const trimmed = dir.trim();
 	if (!trimmed) {
 		return;
 	}
+	namespacedPath("root", trimmed);
 	CLINE_DIR = trimmed;
 	CLINE_DIR_SET_EXPLICITLY = true;
 }
@@ -145,10 +171,13 @@ export function setClineDirIfUnset(dir: string): void {
 	if (!trimmed) {
 		return;
 	}
+	namespacedPath("root", trimmed);
 	CLINE_DIR = trimmed;
 }
 
 export function resolveClineDir(): string {
+	const namespaced = namespacedPath("root");
+	if (namespaced !== undefined) return namespaced;
 	if (CLINE_DIR) {
 		return CLINE_DIR;
 	}
@@ -160,6 +189,8 @@ export function resolveClineDir(): string {
 }
 
 export function resolveDocumentsClineDirectoryPath(): string {
+	const namespaced = namespacedPath("documents");
+	if (namespaced !== undefined) return namespaced;
 	return join(HOME_DIR, "Documents", "Cline");
 }
 
@@ -173,18 +204,22 @@ type DocumentsExtensionName =
 export function resolveDocumentsExtensionPath(
 	name: DocumentsExtensionName,
 ): string {
-	return join(resolveDocumentsClineDirectoryPath(), name);
+	return hostJoin(resolveDocumentsClineDirectoryPath(), name);
 }
 
 export function resolveClineDataDir(): string {
+	const namespaced = namespacedPath("data");
+	if (namespaced !== undefined) return namespaced;
 	const explicitDir = process.env.CLINE_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
 	}
-	return join(resolveClineDir(), "data");
+	return hostJoin(resolveClineDir(), "data");
 }
 
 export function resolveSessionDataDir(): string {
+	const namespaced = namespacedPath("sessions");
+	if (namespaced !== undefined) return namespaced;
 	const explicitDir = process.env.CLINE_SESSION_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
@@ -193,6 +228,8 @@ export function resolveSessionDataDir(): string {
 }
 
 export function resolveTeamDataDir(): string {
+	const namespaced = namespacedPath("teams");
+	if (namespaced !== undefined) return namespaced;
 	const explicitDir = process.env.CLINE_TEAM_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
@@ -201,6 +238,8 @@ export function resolveTeamDataDir(): string {
 }
 
 export function resolveConnectorDataDir(): string {
+	const namespaced = namespacedPath("connectors");
+	if (namespaced !== undefined) return namespaced;
 	const explicitDir = process.env.CLINE_CONNECTOR_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
@@ -220,7 +259,7 @@ export function resolveConnectorLogPath(
 ): string {
 	const safeChannel = channel.replace(/[^a-zA-Z0-9._-]+/g, "_");
 	const safeKey = instanceKey.replace(/[^a-zA-Z0-9._-]+/g, "_");
-	return join(
+	return hostJoin(
 		resolveClineDataDir(),
 		"logs",
 		"connectors",
@@ -230,6 +269,8 @@ export function resolveConnectorLogPath(
 }
 
 export function resolveConnectorSettingsPath(): string {
+	const namespaced = namespacedPath("connectorSettings");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_CONNECTOR_SETTINGS_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -238,6 +279,8 @@ export function resolveConnectorSettingsPath(): string {
 }
 
 export function resolveDbDataDir(): string {
+	const namespaced = namespacedPath("database");
+	if (namespaced !== undefined) return namespaced;
 	const explicitDir = process.env.CLINE_DB_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
@@ -251,6 +294,8 @@ export function resolveDbDataDir(): string {
  * credentials/config stay decoupled from session storage.
  */
 export function resolveConnectorsDbPath(): string {
+	const namespaced = namespacedPath("connectorsDatabase");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_CONNECTORS_DB_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -264,6 +309,8 @@ export function resolveConnectorsDbPath(): string {
  * retention, and query patterns stay decoupled from session storage.
  */
 export function resolveCronDbPath(): string {
+	const namespaced = namespacedPath("cronDatabase");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_CRON_DB_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -273,6 +320,8 @@ export function resolveCronDbPath(): string {
 
 /** Path to the dedicated agenda task queue database. */
 export function resolveTasksDbPath(): string {
+	const namespaced = namespacedPath("tasksDatabase");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_TASKS_DB_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -297,12 +346,12 @@ export interface ResolveTaskSpecsDirOptions {
  * workspace happened to create them.
  */
 export function resolveAgentSchedulesDir(): string {
-	return join(resolveClineDir(), "schedules");
+	return hostJoin(resolveClineDir(), "schedules");
 }
 
 /** Global file-backed agenda tasks: `~/.cline/tasks/`. */
 export function resolveGlobalTaskSpecsDir(): string {
-	return join(resolveClineDir(), "tasks");
+	return hostJoin(resolveClineDir(), "tasks");
 }
 
 /** Workspace file-backed agenda tasks: `<workspace>/.cline/tasks/`. */
@@ -319,7 +368,7 @@ export function resolveTaskSpecsDir(
 ): string {
 	const explicit = options.taskSpecsDir?.trim();
 	if (explicit) {
-		return explicit;
+		return validateStoragePath(explicit);
 	}
 	if (options.scope === "workspace") {
 		return resolveWorkspaceTaskSpecsDir(options.workspaceRoot ?? "");
@@ -346,7 +395,7 @@ export interface ResolveCronSpecsDirOptions {
  *   `~/.cline/cron/`
  */
 export function resolveGlobalCronSpecsDir(): string {
-	return join(resolveClineDir(), "cron");
+	return hostJoin(resolveClineDir(), "cron");
 }
 
 /**
@@ -381,7 +430,7 @@ export function resolveCronSpecsDir(
 		return resolveWorkspaceCronSpecsDir(input);
 	}
 	if (input?.cronSpecsDir?.trim()) {
-		return input.cronSpecsDir.trim();
+		return validateStoragePath(input.cronSpecsDir.trim());
 	}
 	if (input?.scope === "workspace") {
 		const workspaceRoot = input.workspaceRoot?.trim();
@@ -422,6 +471,8 @@ export function resolveCronEventsDir(
 }
 
 export function resolveProviderSettingsPath(): string {
+	const namespaced = namespacedPath("providerSettings");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_PROVIDER_SETTINGS_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -430,6 +481,8 @@ export function resolveProviderSettingsPath(): string {
 }
 
 export function resolveGlobalSettingsPath(): string {
+	const namespaced = namespacedPath("globalSettings");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_GLOBAL_SETTINGS_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -438,6 +491,8 @@ export function resolveGlobalSettingsPath(): string {
 }
 
 export function resolveMcpSettingsPath(): string {
+	const namespaced = namespacedPath("mcpSettings");
+	if (namespaced !== undefined) return namespaced;
 	const explicitPath = process.env.CLINE_MCP_SETTINGS_PATH?.trim();
 	if (explicitPath) {
 		return explicitPath;
@@ -449,11 +504,13 @@ function dedupePaths(paths: ReadonlyArray<string>): string[] {
 	const seen = new Set<string>();
 	const deduped: string[] = [];
 	for (const candidate of paths) {
-		if (!candidate || seen.has(candidate)) {
-			continue;
-		}
-		seen.add(candidate);
-		deduped.push(candidate);
+		if (!candidate) continue;
+		// Workspace roots can be the operator home or alias excluded user storage.
+		// Apply the host policy before any contribution consumer sees the path.
+		const validated = validateStoragePath(candidate);
+		if (seen.has(validated)) continue;
+		seen.add(validated);
+		deduped.push(validated);
 	}
 	return deduped;
 }
@@ -470,7 +527,7 @@ function getWorkspaceSkillDirectories(workspacePath?: string): string[] {
 }
 
 export function resolveAgentsConfigDirPath(): string {
-	return join(resolveClineDir(), AGENT_CONFIG_DIRECTORY_NAME);
+	return hostJoin(resolveClineDir(), AGENT_CONFIG_DIRECTORY_NAME);
 }
 
 export function resolveAgentConfigSearchPaths(
@@ -489,7 +546,7 @@ export function resolveHooksConfigSearchPaths(
 ): string[] {
 	const hooks = [
 		resolveDocumentsExtensionPath("Hooks"),
-		join(resolveClineDir(), HOOKS_CONFIG_DIRECTORY_NAME),
+		hostJoin(resolveClineDir(), HOOKS_CONFIG_DIRECTORY_NAME),
 	];
 	if (workspacePath) {
 		hooks.push(
@@ -505,8 +562,8 @@ export function resolveSkillsConfigSearchPaths(
 ): string[] {
 	return dedupePaths([
 		...getWorkspaceSkillDirectories(workspacePath),
-		join(resolveClineDir(), SKILLS_CONFIG_DIRECTORY_NAME),
-		join(
+		hostJoin(resolveClineDir(), SKILLS_CONFIG_DIRECTORY_NAME),
+		hostJoin(
 			HOME_DIR,
 			LEGACY_AGENT_SKILLS_CONFIG_DIR,
 			SKILLS_CONFIG_DIRECTORY_NAME,
@@ -515,7 +572,11 @@ export function resolveSkillsConfigSearchPaths(
 }
 
 export function resolveGlobalAgentsRulesPath(): string {
-	return join(HOME_DIR, LEGACY_AGENT_SKILLS_CONFIG_DIR, AGENTS_RULES_FILE_NAME);
+	return hostJoin(
+		HOME_DIR,
+		LEGACY_AGENT_SKILLS_CONFIG_DIR,
+		AGENTS_RULES_FILE_NAME,
+	);
 }
 
 /**
@@ -528,10 +589,10 @@ export function resolveGlobalAgentsRulesPath(): string {
 export function resolveWorkspaceRulesConfigPaths(
 	workspacePath: string,
 ): string[] {
-	return [
+	return dedupePaths([
 		join(workspacePath, DEPRECATED_CONFIG_DIR),
 		join(workspacePath, CLINE_CONFIG_DIR, RULES_CONFIG_DIRECTORY_NAME),
-	];
+	]);
 }
 
 /**
@@ -561,8 +622,16 @@ function resolveRedirectedDocumentsPaths(): string[] {
  * tab.
  */
 export function resolveGlobalRulesConfigPaths(): string[] {
+	const namespace = getStorageNamespace();
+	if (namespace)
+		return dedupePaths(
+			namespace.globalRulesPaths({
+				homeDir: HOME_DIR,
+				rootOverride: CLINE_DIR,
+			}),
+		);
 	return dedupePaths([
-		join(resolveClineDir(), RULES_CONFIG_DIRECTORY_NAME),
+		hostJoin(resolveClineDir(), RULES_CONFIG_DIRECTORY_NAME),
 		// The VS Code Rules tab resolves Documents via `xdg-user-dir DOCUMENTS`,
 		// which prints bare $HOME when unconfigured (WSL/headless), putting
 		// global rules at ~/Cline/Rules instead of ~/Documents/Cline/Rules
@@ -600,7 +669,7 @@ export function resolveWorkflowsConfigSearchPaths(
 			? join(workspacePath, ".clinerules", WORKFLOWS_CONFIG_DIRECTORY_NAME)
 			: "",
 		resolveDocumentsExtensionPath("Workflows"),
-		join(resolveClineDir(), WORKFLOWS_CONFIG_DIRECTORY_NAME),
+		hostJoin(resolveClineDir(), WORKFLOWS_CONFIG_DIRECTORY_NAME),
 		workspacePath
 			? join(workspacePath, ".cline", WORKFLOWS_CONFIG_DIRECTORY_NAME)
 			: "",
@@ -612,7 +681,7 @@ export function resolvePluginConfigSearchPaths(
 ): string[] {
 	return dedupePaths([
 		workspacePath ? join(workspacePath, ".cline", PLUGINS_DIRECTORY_NAME) : "",
-		join(resolveClineDir(), PLUGINS_DIRECTORY_NAME),
+		hostJoin(resolveClineDir(), PLUGINS_DIRECTORY_NAME),
 		resolveDocumentsExtensionPath("Plugins"),
 	]);
 }
@@ -628,7 +697,7 @@ export function resolvePluginConfigSearchPaths(
  * opening a repository cannot activate repository-controlled MCP servers.
  */
 export function resolveAgentPluginSearchPaths(): string[] {
-	return [join(HOME_DIR, AGENTS_CONFIG_DIR, PLUGINS_DIRECTORY_NAME)];
+	return [hostJoin(HOME_DIR, AGENTS_CONFIG_DIR, PLUGINS_DIRECTORY_NAME)];
 }
 
 const PLUGIN_MODULE_EXTENSIONS = new Set([".js", ".ts"]);
@@ -912,7 +981,7 @@ export function ensureHookLogDir(filePath?: string): string {
 		ensureParentDir(filePath);
 		return dirname(filePath);
 	}
-	const dir = join(resolveClineDataDir(), "logs");
+	const dir = hostJoin(resolveClineDataDir(), "logs");
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}

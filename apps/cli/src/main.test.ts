@@ -304,9 +304,9 @@ describe("runCli lightweight command dispatch", () => {
 		authMocks.parseAuthCommandArgs.mockReset();
 		authMocks.runAuthCommand.mockReset();
 		providerSettingsMocks.getLastUsedProviderSettings.mockReset();
-		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue(
-			undefined,
-		);
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
+			provider: "openrouter",
+		});
 		providerSettingsMocks.getProviderSettings.mockReset();
 		providerSettingsMocks.getProviderSettings.mockReturnValue(undefined);
 		providerSettingsMocks.saveProviderSettings.mockReset();
@@ -868,36 +868,27 @@ describe("runCli lightweight command dispatch", () => {
 		).toHaveBeenCalledWith(undefined, notice.id);
 	});
 
-	it("passes the active ClinePass provider into the migration notice gate", async () => {
+	it("blocks saved ClinePass before migration notice or runtime", async () => {
 		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
 			provider: "cline-pass",
-			model: "cline-pass/test-model",
+			model: "fixture",
+			auth: { accountId: "fixture", accessToken: "fixture" },
 		});
-		process.argv = ["bun", "src/index.ts"];
-
+		process.argv = ["bun", "src/index.ts", "-i"];
 		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.saveProviderSettings).not.toHaveBeenCalled();
+		expect(telemetryMocks.identifyTelemetryAccount).not.toHaveBeenCalled();
 		expect(
 			migrationNoticeMocks.getClineCliMigrationNotice,
-		).toHaveBeenCalledWith(undefined, process.env, {
-			activeProviderId: "cline-pass",
-		});
-		expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
-			expect.objectContaining({
-				providerId: "cline-pass",
-			}),
-			expect.anything(),
-			undefined,
-			expect.objectContaining({
-				initialNotice: undefined,
-			}),
-		);
+		).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
 	});
-
 	it("does not start OAuth before onboarding in interactive mode", async () => {
 		authMocks.isOAuthProvider.mockReturnValue(true);
-		authMocks.normalizeProviderId.mockReturnValue("cline");
+		authMocks.normalizeProviderId.mockReturnValue("openai-codex");
 		authMocks.getPersistedProviderApiKey.mockReturnValue(undefined);
 		authMocks.ensureOAuthProviderApiKey.mockClear();
 		process.argv = ["bun", "src/index.ts", "-i"];
@@ -909,7 +900,7 @@ describe("runCli lightweight command dispatch", () => {
 		expect(runtimeMocks.runInteractive).toHaveBeenCalledTimes(1);
 		expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
 			expect.objectContaining({
-				providerId: "cline",
+				providerId: "openai-codex",
 				apiKey: "",
 			}),
 			expect.anything(),
@@ -933,7 +924,7 @@ describe("runCli lightweight command dispatch", () => {
 
 		await expect(runCli()).resolves.toBeUndefined();
 		expect(llmMocks.resolveProviderConfig).toHaveBeenCalledWith(
-			"cline",
+			"openrouter",
 			{
 				loadLatestOnInit: true,
 				loadPrivateOnAuth: true,
@@ -962,7 +953,7 @@ describe("runCli lightweight command dispatch", () => {
 
 		await expect(runCli()).resolves.toBeUndefined();
 		expect(llmMocks.resolveProviderConfig).toHaveBeenCalledWith(
-			"cline",
+			"openrouter",
 			{
 				loadLatestOnInit: true,
 				loadPrivateOnAuth: true,
@@ -990,7 +981,7 @@ describe("runCli lightweight command dispatch", () => {
 
 		await expect(runCli()).resolves.toBeUndefined();
 		expect(llmMocks.resolveProviderConfig).toHaveBeenCalledWith(
-			"cline",
+			"openrouter",
 			undefined,
 			undefined,
 		);
@@ -1282,118 +1273,81 @@ describe("runCli lightweight command dispatch", () => {
 		);
 	});
 
-	it("passes Cline provider settings as Cline account options", async () => {
-		const clineSettings = {
+	it("blocks Cline account options before interactive startup", async () => {
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
 			provider: "cline",
-			baseUrl: "https://api.example.test",
-			model: "anthropic/claude-sonnet-4.6",
-		};
-		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue(
-			clineSettings,
-		);
-		providerSettingsMocks.getProviderSettings.mockReturnValue(clineSettings);
-		authMocks.normalizeProviderId.mockImplementation(
-			(providerId?: string) => providerId ?? "cline",
-		);
-		process.argv = ["bun", "src/index.ts"];
-
+			model: "fixture",
+			auth: { accountId: "fixture", accessToken: "fixture" },
+		});
+		process.argv = ["bun", "src/index.ts", "-i"];
 		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
-		expect(runtimeMocks.runInteractive).toHaveBeenCalledTimes(1);
-		expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
-			expect.any(Object),
-			expect.anything(),
-			undefined,
-			expect.objectContaining({
-				clineApiBaseUrl: "https://api.example.test",
-				clineProviderSettings: clineSettings,
-			}),
-		);
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.saveProviderSettings).not.toHaveBeenCalled();
+		expect(telemetryMocks.identifyTelemetryAccount).not.toHaveBeenCalled();
+		expect(
+			migrationNoticeMocks.getClineCliMigrationNotice,
+		).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
 	});
-
-	it("seeds feature flag identity from persisted Cline account id before refreshing flags", async () => {
-		const clineSettings = {
-			provider: "cline",
-			model: "anthropic/claude-sonnet-4.6",
-			auth: {
-				accountId: "acct-startup",
-				accessToken: "workos:token",
-				refreshToken: "refresh-token",
-			},
-		};
-		providerSettingsMocks.getProviderSettings.mockReturnValue(clineSettings);
-		process.argv = ["bun", "src/index.ts"];
-
+	it("does not seed Cline identity or refresh hosted flags for direct startup", async () => {
+		providerSettingsMocks.getProviderSettings.mockImplementation(
+			(id: string) =>
+				id === "cline"
+					? { provider: id, auth: { accountId: "fixture" } }
+					: undefined,
+		);
+		process.argv = ["bun", "src/index.ts", "--provider", "openrouter", "-i"];
 		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
+		await runCli();
+		expect(runtimeMocks.runInteractive).toHaveBeenCalledOnce();
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalledWith(
+			"cline",
+		);
 		expect(
 			featureFlagMocks.setCliFeatureFlagsAccountContext,
-		).toHaveBeenCalledWith({ id: "acct-startup" });
-		// The account identity must be seeded before flags are refreshed/used so
-		// the background refresh resolves flags for the correct account.
+		).not.toHaveBeenCalled();
 		expect(
-			featureFlagMocks.setCliFeatureFlagsAccountContext.mock
-				.invocationCallOrder[0],
-		).toBeLessThan(
-			featureFlagMocks.refreshCliFeatureFlagsInBackground.mock
-				.invocationCallOrder[0],
-		);
+			featureFlagMocks.refreshCliFeatureFlagsInBackground,
+		).not.toHaveBeenCalled();
 	});
-
-	it("identifies saved Cline accountId for telemetry before runtime events", async () => {
-		// CLINE-2406: when persisted Cline auth includes an accountId, the
-		// runtime path must call identifyTelemetryAccount(accountContext) so
-		// subsequent task.* and workspace.* events carry user_id.
-		const clineSettings = {
+	it("blocks saved Cline identity before telemetry and runtime", async () => {
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
 			provider: "cline",
-			model: "anthropic/claude-sonnet-4.6",
-			auth: { accountId: "usr-abc-123", refreshToken: "rt-token" },
-		};
-		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue(
-			clineSettings,
-		);
-		providerSettingsMocks.getProviderSettings.mockReturnValue(clineSettings);
-		authMocks.normalizeProviderId.mockImplementation(
-			(providerId?: string) => providerId ?? "cline",
-		);
-		process.argv = ["bun", "src/index.ts"];
-
+			model: "fixture",
+			auth: { accountId: "fixture", accessToken: "fixture" },
+		});
+		process.argv = ["bun", "src/index.ts", "-i"];
 		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
-		expect(telemetryMocks.identifyTelemetryAccount).toHaveBeenCalledWith(
-			expect.objectContaining({
-				id: "usr-abc-123",
-				provider: "cline",
-			}),
-		);
-	});
-
-	it("does not call identifyTelemetryAccount in runtime path when no saved Cline accountId", async () => {
-		// CLINE-2406: when no persisted accountId is found (anonymous/unauthenticated),
-		// identifyTelemetryAccount should not be called from the runtime path.
-		const clineSettings = {
-			provider: "cline",
-			model: "anthropic/claude-sonnet-4.6",
-			// no auth / no accountId
-		};
-		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue(
-			clineSettings,
-		);
-		providerSettingsMocks.getProviderSettings.mockReturnValue(clineSettings);
-		authMocks.normalizeProviderId.mockImplementation(
-			(providerId?: string) => providerId ?? "cline",
-		);
-		process.argv = ["bun", "src/index.ts"];
-
-		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.saveProviderSettings).not.toHaveBeenCalled();
 		expect(telemetryMocks.identifyTelemetryAccount).not.toHaveBeenCalled();
+		expect(
+			migrationNoticeMocks.getClineCliMigrationNotice,
+		).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
 	});
-
+	it("blocks unauthenticated saved Cline before runtime", async () => {
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
+			provider: "cline",
+			model: "fixture",
+			auth: { accountId: "fixture", accessToken: "fixture" },
+		});
+		process.argv = ["bun", "src/index.ts", "-i"];
+		const { runCli } = await import("./main");
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.saveProviderSettings).not.toHaveBeenCalled();
+		expect(telemetryMocks.identifyTelemetryAccount).not.toHaveBeenCalled();
+		expect(
+			migrationNoticeMocks.getClineCliMigrationNotice,
+		).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
+	});
 	it("does not call identifyTelemetryAccount from runtime path when provider is not cline", async () => {
 		// CLINE-2406: identity identification from saved settings only applies
 		// to Cline-provider sessions; other providers use different auth flows.
@@ -1678,7 +1632,7 @@ describe("runCli lightweight command dispatch", () => {
 		mockState.runAgentCalls = 0;
 		runtimeMocks.runAgent.mockClear();
 		providerSettingsMocks.getProviderSettings.mockReturnValue({
-			provider: "cline",
+			provider: "openrouter",
 			model: "openai/gpt-5",
 			reasoning: { enabled: true, effort: "high" },
 		});
@@ -1704,7 +1658,7 @@ describe("runCli lightweight command dispatch", () => {
 		mockState.runAgentCalls = 0;
 		runtimeMocks.runAgent.mockClear();
 		providerSettingsMocks.getProviderSettings.mockReturnValue({
-			provider: "cline",
+			provider: "openrouter",
 			model: "openai/gpt-5",
 			reasoning: { enabled: false },
 		});
@@ -1730,7 +1684,7 @@ describe("runCli lightweight command dispatch", () => {
 		mockState.runAgentCalls = 0;
 		runtimeMocks.runAgent.mockClear();
 		providerSettingsMocks.getProviderSettings.mockReturnValue({
-			provider: "cline",
+			provider: "openrouter",
 			model: "openai/gpt-5",
 			reasoning: { enabled: true, effort: "high" },
 		});
@@ -1908,7 +1862,7 @@ describe("runCli lightweight command dispatch", () => {
 		mockState.runAgentCalls = 0;
 		runtimeMocks.runAgent.mockClear();
 		authMocks.isOAuthProvider.mockReturnValue(true);
-		authMocks.normalizeProviderId.mockReturnValue("cline");
+		authMocks.normalizeProviderId.mockReturnValue("openai-codex");
 		authMocks.getPersistedProviderApiKey.mockReturnValue(undefined);
 		authMocks.ensureOAuthProviderApiKey.mockClear();
 
@@ -1925,7 +1879,7 @@ describe("runCli lightweight command dispatch", () => {
 			expect.objectContaining({
 				outputMode: "json",
 				apiKey: "",
-				providerId: "cline",
+				providerId: "openai-codex",
 			}),
 			expect.anything(),
 		);
@@ -1956,6 +1910,81 @@ describe("runCli lightweight command dispatch", () => {
 			}),
 			expect.anything(),
 		);
+	});
+	it.each([
+		"cline",
+		"cline-pass",
+	])("TEST-QB-016/017 rejects explicit %s before credential/catalog access", async (provider) => {
+		const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+		forcePromptModeInput();
+		process.argv = [
+			"bun",
+			"src/index.ts",
+			"--provider",
+			provider,
+			"--json",
+			"say hello",
+		];
+		const { runCli } = await import("./main");
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(
+			stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join(""),
+		).toContain("Configure a direct model provider");
+		expect(
+			providerSettingsMocks.getLastUsedProviderSettings,
+		).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(authMocks.getPersistedProviderApiKey).not.toHaveBeenCalled();
+		expect(llmMocks.resolveProviderConfig).not.toHaveBeenCalled();
+		expect(runtimeMocks.runAgent).not.toHaveBeenCalled();
+	});
+	it.each([
+		"cline",
+		"cline-pass",
+	])("TEST-QB-016/017 rejects saved %s before credential/catalog access", async (provider) => {
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
+			provider,
+			apiKey: "fixture-inherited",
+		});
+		process.argv = ["bun", "src/index.ts", "-i"];
+		const { runCli } = await import("./main");
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(llmMocks.resolveProviderConfig).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
+	});
+	it("TEST-QB-016/017 requires provider configuration rather than defaulting to cloud", async () => {
+		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue(
+			undefined,
+		);
+		process.argv = ["bun", "src/index.ts", "-i"];
+		const { runCli } = await import("./main");
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalled();
+		expect(llmMocks.resolveProviderConfig).not.toHaveBeenCalled();
+		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
+	});
+	it("TEST-QB-016/017 explicit direct provider never reads unrelated Cline account", async () => {
+		process.argv = ["bun", "src/index.ts", "--provider", "openrouter", "-i"];
+		const { runCli } = await import("./main");
+		await runCli();
+		expect(runtimeMocks.runInteractive).toHaveBeenCalledOnce();
+		expect(
+			providerSettingsMocks.getLastUsedProviderSettings,
+		).not.toHaveBeenCalled();
+		expect(providerSettingsMocks.getProviderSettings).not.toHaveBeenCalledWith(
+			"cline",
+		);
+		expect(
+			featureFlagMocks.setCliFeatureFlagsAccountContext,
+		).not.toHaveBeenCalled();
+		expect(
+			featureFlagMocks.refreshCliFeatureFlagsInBackground,
+		).not.toHaveBeenCalled();
+		expect(telemetryMocks.identifyTelemetryAccount).not.toHaveBeenCalled();
 	});
 });
 

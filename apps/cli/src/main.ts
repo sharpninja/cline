@@ -2,7 +2,6 @@ import { fstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type { ToolPolicy } from "@cline/core";
-
 import { registerDisposable } from "@cline/shared";
 import type { Command } from "commander";
 import { createDashboardCommand } from "./commands/dashboard-command";
@@ -12,10 +11,7 @@ import {
 	commanderToParsedArgs,
 	createProgram,
 } from "./commands/program";
-import {
-	autoUpdateOnStartup,
-	getPreferredKanbanInstaller,
-} from "./commands/update";
+import { getPreferredKanbanInstaller } from "./commands/update";
 import {
 	CLI_DEFAULT_CHECKPOINT_CONFIG,
 	CLI_DEFAULT_MAX_CONSECUTIVE_MISTAKES,
@@ -23,15 +19,16 @@ import {
 import type { TuiStartupTarget } from "./tui/types";
 import { filterChatModels } from "./utils/chat-models";
 import { registerClineClientIdentity } from "./utils/cline-client-identity";
+import {
+	assertDirectProvider,
+	requireDirectProvider,
+} from "./utils/cloud-policy";
 import { getCliBuildInfo } from "./utils/common";
 import {
 	buildCliCompactionConfig,
 	CLI_COMPACTION_MODE_EXPECTED_TEXT,
 } from "./utils/compaction-mode";
-import {
-	refreshCliFeatureFlagsInBackground,
-	setCliFeatureFlagsAccountContext,
-} from "./utils/feature-flags";
+
 import {
 	configureSandboxEnvironment,
 	normalizeAutoApproveArgs,
@@ -60,7 +57,6 @@ import { rewriteTeamPrompt, TEAM_COMMAND_USAGE } from "./utils/team-command";
 import {
 	captureCliExtensionActivated,
 	getCliTelemetryService,
-	identifyTelemetryAccount,
 } from "./utils/telemetry";
 import type { Config } from "./utils/types";
 
@@ -150,15 +146,17 @@ function startupTargetTakesPrecedenceOverMigrationNotice(
 export async function runCli(): Promise<void> {
 	registerClineClientIdentity("cline-cli");
 	installStreamErrorGuards();
-	autoUpdateOnStartup();
 
 	const cliArgs = process.argv.slice(2);
 	const isFullTTY =
 		process.stdin.isTTY === true && process.stdout.isTTY === true;
 	const configDir = resolveConfigDirArg(cliArgs);
-	const { setClineDir, setHomeDir } = await import("@cline/shared/storage");
+	const { setClineDir, setHomeDir, resolveClineDir } = await import(
+		"@cline/shared/storage"
+	);
 	if (configDir) {
 		setClineDir(configDir);
+		process.env.CLINE_QB_DIR = resolveClineDir();
 	}
 	setHomeDir(homedir());
 
@@ -202,7 +200,7 @@ export async function runCli(): Promise<void> {
 		.option("-c, --cwd <path>", "Working directory")
 		.option(
 			"--data-dir <dir>",
-			"Use isolated local state at <dir> instead of ~/.cline (enables sandbox mode)",
+			"Use isolated local state at <dir> instead of ~/.cline-qb (enables sandbox mode)",
 		)
 		.option("-v, --verbose", "Show verbose output")
 		.action(async (positionalProvider: string | undefined) => {
@@ -222,15 +220,16 @@ export async function runCli(): Promise<void> {
 			// for argv tokens it can spot before commander runs. Reapplying
 			// here ensures opts.config (parsed by commander, including the
 			// --config=<dir> form) is always respected before any provider
-			// settings manager is constructed against ~/.cline.
+			// settings manager is constructed against ~/.cline-qb.
 			if (opts.config?.trim()) {
 				const { setClineDir } = await import("@cline/shared/storage");
 				setClineDir(opts.config.trim());
+				process.env.CLINE_QB_DIR = resolveClineDir();
 			}
 			// Honor --data-dir before constructing the provider settings manager
-			// so writes land under the chosen data dir instead of ~/.cline.
+			// so writes land under the chosen data dir instead of ~/.cline-qb.
 			configureSandboxEnvironment({
-				enabled: !!opts.dataDir || process.env.CLINE_SANDBOX?.trim() === "1",
+				enabled: !!opts.dataDir || process.env.CLINE_QB_SANDBOX?.trim() === "1",
 				cwd: opts.cwd ?? process.cwd(),
 				explicitDir: opts.dataDir,
 			});
@@ -629,7 +628,7 @@ export async function runCli(): Promise<void> {
 
 	const updateCmd = program
 		.command("update")
-		.description("Check for updates and install if available")
+		.description("Explain how to install a reviewed cline-qb build")
 		.allowUnknownOption()
 		.allowExcessArguments()
 		.option("-v, --verbose", "Show verbose output")
@@ -843,10 +842,10 @@ export async function runCli(): Promise<void> {
 	const cwd = args.cwd ?? process.cwd();
 	const workspaceRoot = resolveWorkspaceRoot(cwd);
 	// Sandbox mode is enabled implicitly whenever --data-dir is provided, or
-	// when CLINE_SANDBOX=1 is set in the environment (in which case the data
-	// dir falls back to $CLINE_SANDBOX_DATA_DIR or /tmp/cline-sandbox).
+	// when CLINE_QB_SANDBOX=1 is set in the environment (in which case the data
+	// dir falls back to $CLINE_QB_DATA_DIR or /tmp/cline-qb-sandbox).
 	const sandboxEnabled =
-		!!args.dataDir || process.env.CLINE_SANDBOX?.trim() === "1";
+		!!args.dataDir || process.env.CLINE_QB_SANDBOX?.trim() === "1";
 	const sandboxDataDir = configureSandboxEnvironment({
 		enabled: sandboxEnabled,
 		cwd,
@@ -916,40 +915,26 @@ export async function runCli(): Promise<void> {
 	};
 	registerDisposable(stopUserInstructionService);
 	try {
-		const persistedClineAccountId = providerSettingsManager
-			.getProviderSettings("cline")
-			?.auth?.accountId?.trim();
-		if (persistedClineAccountId) {
-			setCliFeatureFlagsAccountContext({ id: persistedClineAccountId });
+		let provider: string;
+		try {
+			const requestedProvider = args.provider?.trim();
+			if (requestedProvider) assertDirectProvider(requestedProvider);
+			provider = requireDirectProvider(
+				normalizeProviderId(
+					requestedProvider ||
+						providerSettingsManager.getLastUsedProviderSettings({
+							isClinePassEnabled: true,
+						})?.provider ||
+						"",
+				),
+			);
+		} catch (error) {
+			writeErr(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+			return;
 		}
-		refreshCliFeatureFlagsInBackground();
-		const lastUsedProviderSettings =
-			providerSettingsManager.getLastUsedProviderSettings({
-				isClinePassEnabled: true,
-			});
-		const provider = normalizeProviderId(
-			args.provider?.trim() || lastUsedProviderSettings?.provider || "cline",
-		);
 		let selectedProviderSettings =
 			providerSettingsManager.getProviderSettings(provider);
-
-		// Apply locally persisted Cline account identity so subsequent events
-		// (task.*, workspace.initialized) carry user_id when available.
-		// Note: user.extension_activated fires anonymously earlier in startup
-		// and cannot be retroactively updated; this is by design for
-		// lightweight subcommand and pre-auth CLI flows. See CLINE-2406.
-		if (provider === "cline") {
-			const savedAuth = selectedProviderSettings?.auth;
-			if (savedAuth?.accountId) {
-				identifyTelemetryAccount({
-					id: savedAuth.accountId,
-					provider: "cline",
-					organizationId: savedAuth.organizationId,
-					organizationName: savedAuth.organizationName,
-					memberId: savedAuth.memberId,
-				});
-			}
-		}
 
 		const persistedApiKey = getPersistedProviderApiKey(
 			provider,

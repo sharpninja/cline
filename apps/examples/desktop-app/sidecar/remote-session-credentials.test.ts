@@ -30,8 +30,8 @@ vi.mock("@cline/core", async () => {
 
 beforeEach(() => {
 	mocks.settings.clear();
-	mocks.settings.set("cline", {
-		provider: "cline",
+	mocks.settings.set("anthropic", {
+		provider: "anthropic",
 		model: "model-a",
 		auth: { accessToken: "expired", refreshToken: "private-refresh" },
 	});
@@ -44,7 +44,7 @@ beforeEach(() => {
 	mocks.refresh
 		.mockReset()
 		.mockImplementation(async ({ providerId }: { providerId: string }) => {
-			if (providerId !== "cline") return null;
+			if (providerId !== "anthropic") return null;
 			return { apiKey: "fresh-token" };
 		});
 });
@@ -64,7 +64,7 @@ function runtime() {
 		})),
 		get: vi.fn(async () => ({
 			sessionId: "shared-id",
-			provider: "cline",
+			provider: "anthropic",
 			model: "model-a",
 			cwd: "/remote/workspace",
 			metadata: { title: "Remote conversation" },
@@ -86,7 +86,7 @@ function runtime() {
 	} as unknown as SessionRuntimeBinding);
 	const config = {
 		environmentId: "remote",
-		provider: "cline",
+		provider: "anthropic",
 		model: "model-a",
 		cwd: "/remote/workspace",
 	};
@@ -197,7 +197,7 @@ describe("SSH session credentials and history", () => {
 				apiKey: "old-provider-key",
 				baseUrl: "https://old-provider.example",
 				headers: { Authorization: "old-secret" },
-				providerConfig: { providerId: "cline", apiKey: "old-provider-key" },
+				providerConfig: { providerId: "anthropic", apiKey: "old-provider-key" },
 			},
 		});
 		await handleChatSessionCommand(ctx, {

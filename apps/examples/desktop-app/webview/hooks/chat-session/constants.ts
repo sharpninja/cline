@@ -1,8 +1,7 @@
-import { CLINE_DEFAULT_MODEL_ID } from "@cline/shared/browser";
+import { rejectClineAccount } from "@cline/qbrain-governance/cloud-policy";
 import type { ChatSessionConfig } from "@/lib/chat-schema";
 import {
 	type ExecutionTarget,
-	readExecutionTargetFromWindow,
 	readModelSelectionStorageFromWindow,
 } from "@/lib/model-selection";
 import { normalizeProviderId } from "@/lib/provider-id";
@@ -27,9 +26,9 @@ export const DEFAULT_CHAT_CONFIG: ChatSessionConfig = {
 	workspaceRoot: "",
 	cwd: "",
 	environmentId: LOCAL_WORKSPACE_ENVIRONMENT_ID,
-	provider: "cline",
-	model: CLINE_DEFAULT_MODEL_ID,
-	apiKey: process.env.CLINE_API_KEY || "",
+	provider: "",
+	model: "",
+	apiKey: "",
 	mode: "act",
 	systemPrompt: undefined,
 	maxIterations: undefined,
@@ -42,53 +41,23 @@ export const DEFAULT_CHAT_CONFIG: ChatSessionConfig = {
 };
 
 export function getInitialChatConfig(
-	environmentId: string,
+	environmentId: string = LOCAL_WORKSPACE_ENVIRONMENT_ID,
 	options?: { executionTarget?: ExecutionTarget },
 ): ChatSessionConfig {
+	if (options?.executionTarget === "cloud") return rejectClineAccount();
 	const selection = readModelSelectionStorageFromWindow();
-	const workspaceSelection = readWorkspaceSelectionFromWindow(environmentId);
-	const rememberedProvider = normalizeProviderId(selection.lastProvider);
-	const rememberedModelForProvider = rememberedProvider
-		? (selection.lastModelByProvider[rememberedProvider] ??
-			selection.lastModelByProvider[selection.lastProvider.trim()])
-		: undefined;
-	const rememberedModelForDefaultProvider =
-		selection.lastModelByProvider[DEFAULT_CHAT_CONFIG.provider];
-	const provider = rememberedProvider || DEFAULT_CHAT_CONFIG.provider;
-	const model =
-		rememberedModelForProvider ||
-		(provider === DEFAULT_CHAT_CONFIG.provider
-			? rememberedModelForDefaultProvider
-			: undefined) ||
-		DEFAULT_CHAT_CONFIG.model;
-
-	const local: ChatSessionConfig = {
+	const workspace = readWorkspaceSelectionFromWindow(environmentId);
+	const provider = normalizeProviderId(selection.lastProvider);
+	return {
 		...DEFAULT_CHAT_CONFIG,
 		environmentId,
 		provider,
-		model,
-		workspaceRoot: workspaceSelection.lastWorkspace,
-		cwd: workspaceSelection.lastWorkspace,
-	};
-	// Cloud preferences apply only to the local environment.
-	const executionTarget =
-		options?.executionTarget ??
-		(environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID
-			? readExecutionTargetFromWindow()
-			: "local");
-	if (executionTarget !== "cloud") {
-		return local;
-	}
-	return {
-		...local,
-		executionTarget: "cloud",
-		provider: DEFAULT_CHAT_CONFIG.provider,
-		model:
-			readModelSelectionStorageFromWindow("cloud").lastModelByProvider.cline ||
-			(provider === DEFAULT_CHAT_CONFIG.provider
-				? model
-				: DEFAULT_CHAT_CONFIG.model),
-		workspaceRoot: "",
-		cwd: "",
+		model: provider
+			? (selection.lastModelByProvider[provider] ??
+				selection.lastModelByProvider[selection.lastProvider.trim()] ??
+				"")
+			: "",
+		workspaceRoot: workspace.lastWorkspace,
+		cwd: workspace.lastWorkspace,
 	};
 }

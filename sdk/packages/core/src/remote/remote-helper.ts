@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { claimHubDaemonProcess } from "@cline/shared";
-import { setHomeDirIfUnset } from "@cline/shared/storage";
+import { claimHubDaemonProcess, getHubNamespace } from "@cline/shared";
+import { setHomeDirIfUnset, validateStoragePath } from "@cline/shared/storage";
 import { requestHubShutdown } from "../hub/client";
 import { ensureDetachedHubServer } from "../hub/daemon";
 import { clearHubDiscoveryIfOwned, readHubDiscovery } from "../hub/discovery";
@@ -56,7 +56,9 @@ function configureDedicatedDiscovery(
 	}
 	// This explicit owner record is the safety boundary: the remote helper never
 	// reads or shuts down the user's default CLI-owned Hub discovery record.
-	dependencies.env.CLINE_HUB_DISCOVERY_PATH = discoveryPath;
+	dependencies.env[
+		getHubNamespace()?.discoveryVariable ?? "CLINE_HUB_DISCOVERY_PATH"
+	] = validateStoragePath(discoveryPath);
 	return discoveryPath;
 }
 

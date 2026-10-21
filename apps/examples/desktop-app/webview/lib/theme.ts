@@ -1,4 +1,4 @@
-export const HUB_THEME_STORAGE_KEY = "cline-hub-theme";
+export const HUB_THEME_STORAGE_KEY = "cline-qb.hub-theme";
 
 export type HubTheme = "light" | "dark";
 
@@ -87,7 +87,7 @@ export function setStoredHubTheme(theme: HubTheme): HubTheme {
 	return applyHubTheme(theme);
 }
 
-export const HUB_ACCENT_STORAGE_KEY = "cline.code.accent.v1";
+export const HUB_ACCENT_STORAGE_KEY = "cline-qb.code.accent.v1";
 
 /**
  * Accent palettes selectable in Settings. "violet" is the built-in brand

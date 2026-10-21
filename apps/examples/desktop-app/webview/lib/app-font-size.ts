@@ -1,4 +1,4 @@
-export const APP_FONT_SIZE_STORAGE_KEY = "cline.code.font-size.v1";
+export const APP_FONT_SIZE_STORAGE_KEY = "cline-qb.code.font-size.v1";
 export const APP_FONT_SIZE_CHANGE_EVENT = "cline-app-font-size-change";
 
 export const APP_FONT_SIZES = [12, 13, 14, 15, 16, 17, 18, 19, 20] as const;

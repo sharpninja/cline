@@ -1,5 +1,7 @@
 import { relative, sep } from "node:path";
+import { createQbrainStorageNamespace } from "@cline/qbrain-governance/storage-policy";
 import {
+	registerStorageNamespace,
 	resolveClineDataDir,
 	resolveClineDir,
 	setHomeDir,
@@ -25,6 +27,9 @@ describe("root option help text", () => {
 			delete process.env[key];
 		}
 		setHomeDir(FAKE_HOME);
+		registerStorageNamespace(
+			createQbrainStorageNamespace({ homeDir: FAKE_HOME, env: {} }),
+		);
 	});
 
 	afterAll(() => {
@@ -49,8 +54,8 @@ describe("root option help text", () => {
 
 		// Sanity-check the resolvers themselves so the assertions below can't
 		// silently drift along with a resolver regression.
-		expect(configDefault).toBe("~/.cline");
-		expect(dataDirDefault).toBe("~/.cline/data");
+		expect(configDefault).toBe("~/.cline-qb");
+		expect(dataDirDefault).toBe("~/.cline-qb/data");
 
 		expect(help).toContain(
 			`Configuration directory (default: ${configDefault})`,

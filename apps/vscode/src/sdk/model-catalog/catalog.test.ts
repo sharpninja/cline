@@ -28,15 +28,20 @@ vi.mock("@cline/core", async (importOriginal: any) => {
 	}
 })
 
-vi.mock("@/services/feature-flags", () => ({
-	getFeatureFlagsService: () => ({
+vi.mock("@/services/feature-flags", () => {
+	const service = {
 		getBooleanFlagEnabled: mocks.getBooleanFlagEnabled,
 		poll: mocks.pollFeatureFlags,
-	}),
-}))
+	}
+	return { getFeatureFlagsService: () => service, featureFlagsService: service }
+})
 
 vi.mock("@/services/logging/distinctId", () => ({
+	_GENERATED_MACHINE_ID_KEY: "cline.generatedMachineId",
+	initializeDistinctId: vi.fn(async () => {}),
 	setDistinctId: vi.fn(),
+	getDistinctId: vi.fn(() => "test-user"),
+	getDeviceId: vi.fn(() => "test-device"),
 }))
 
 vi.mock("../provider-migration", () => ({
@@ -551,7 +556,10 @@ describe("ProviderCatalog Phase 3.5 listProviders", () => {
 		})
 		expect(listings[0]).not.toHaveProperty("models")
 		expect(mocks.listLocalProviders).toHaveBeenCalledTimes(1)
-		expect(mocks.listLocalProviders).toHaveBeenCalledWith(expect.anything(), { isClinePassEnabled: true })
+		expect(mocks.listLocalProviders).toHaveBeenCalledWith(expect.anything(), {
+			isClinePassEnabled: false,
+			includeProvider: expect.any(Function),
+		})
 	})
 
 	it("passes the SDK's subscription usage-cost display through to listings", async () => {
@@ -615,21 +623,19 @@ describe("ProviderCatalog Phase 3.5 listProviders", () => {
 		const { createProviderCatalog } = await import("./catalog")
 		mocks.listLocalProviders
 			.mockResolvedValueOnce({
-				providers: [{ id: "cline", name: "Cline", protocol: "anthropic", client: "anthropic", source: "system" }],
+				providers: [{ id: "openrouter", name: "Cline", protocol: "anthropic", client: "anthropic", source: "system" }],
 			})
 			.mockResolvedValueOnce({
-				providers: [
-					{ id: "cline-pass", name: "ClinePass", protocol: "anthropic", client: "anthropic", source: "system" },
-				],
+				providers: [{ id: "ollama", name: "ClinePass", protocol: "anthropic", client: "anthropic", source: "system" }],
 			})
-		const catalog = createProviderCatalog(makeReader({ providerId: parseProviderId("cline") }))
+		const catalog = createProviderCatalog(makeReader({ providerId: parseProviderId("openrouter") }))
 
 		const first = await catalog.listProviders()
 		catalog.invalidateProviderListings()
 		const second = await catalog.listProviders()
 
-		expect(first[0]?.id).toBe("cline")
-		expect(second[0]?.id).toBe("cline-pass")
+		expect(first[0]?.id).toBe("openrouter")
+		expect(second[0]?.id).toBe("ollama")
 		expect(mocks.listLocalProviders).toHaveBeenCalledTimes(2)
 	})
 
@@ -736,5 +742,35 @@ describe("ProviderCatalog Phase 3.6 subscribe", () => {
 		await catalog.resolveModels(providerId)
 
 		expect(listener).not.toHaveBeenCalled()
+	})
+})
+
+describe("AC-QB-016/017 hosted provider catalog exclusion", () => {
+	it.each(["cline", "cline-pass"])("refuses %s before SDK resolution even with saved credentials", async (id) => {
+		const { createProviderCatalog } = await import("./catalog")
+		const providerId = parseProviderId(id)
+		const catalog = createProviderCatalog(makeReader({ providerId, apiKey: "synthetic-legacy" }))
+		const result = await catalog.resolveModels(providerId, { forceRefresh: true })
+		expect(result.ok).toBe(false)
+		if (result.ok) throw new Error("Hosted provider unexpectedly resolved")
+		expect(result.error.message).toContain("unavailable in cline-qb")
+		expect(mocks.resolveProviderConfig).not.toHaveBeenCalled()
+		expect(catalog.peekModels(providerId)).toBeUndefined()
+	})
+	it("excludes hosted providers before enumeration and from returned legacy listings", async () => {
+		const { createProviderCatalog } = await import("./catalog")
+		mocks.listLocalProviders.mockResolvedValue({
+			providers: [
+				{ id: "cline", name: "Cline" },
+				{ id: "cline-pass", name: "ClinePass" },
+				{ id: "ollama", name: "Ollama" },
+			],
+		})
+		const listings = await createProviderCatalog(makeReader({ providerId: parseProviderId("ollama") })).listProviders()
+		expect(listings.map((p) => p.id)).toEqual(["ollama"])
+		const options = mocks.listLocalProviders.mock.calls[0][1]
+		expect(options.includeProvider("cline")).toBe(false)
+		expect(options.includeProvider("cline-pass")).toBe(false)
+		expect(options.includeProvider("ollama")).toBe(true)
 	})
 })

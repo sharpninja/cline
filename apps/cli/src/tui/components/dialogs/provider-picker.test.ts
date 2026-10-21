@@ -87,7 +87,7 @@ describe("saveManualProviderApiKey", () => {
 	it("clears stored OAuth tokens so the manual key takes effect", async () => {
 		const manager = createManager();
 		manager.saveProviderSettings({
-			provider: "cline",
+			provider: "openai-codex",
 			auth: {
 				accessToken: "stale-access-token",
 				refreshToken: "stale-refresh-token",
@@ -95,70 +95,37 @@ describe("saveManualProviderApiKey", () => {
 			},
 		});
 
-		await saveManualProviderApiKey(manager, "cline", "manual-api-key");
+		await saveManualProviderApiKey(manager, "openai-codex", "manual-api-key");
 
-		const settings = manager.getProviderSettings("cline");
+		const settings = manager.getProviderSettings("openai-codex");
 		expect(settings?.apiKey).toBe("manual-api-key");
 		expect(settings?.auth?.accessToken).toBeUndefined();
 		expect(settings?.auth?.refreshToken).toBeUndefined();
 		expect(settings?.auth?.accountId).toBe("acct_123");
-		expect(getPersistedProviderApiKey("cline", settings)).toBe(
+		expect(getPersistedProviderApiKey("openai-codex", settings)).toBe(
 			"manual-api-key",
 		);
-		expect(isProviderConfigured("cline", settings)).toBe(true);
+		expect(isProviderConfigured("openai-codex", settings)).toBe(true);
 	});
 
-	it("saves cline-pass keys to the shared cline auth storage entry", async () => {
+	it.each([
+		"cline",
+		"cline-pass",
+	])("rejects manual %s keys without touching inherited credentials", async (providerId) => {
 		const manager = createManager();
 		manager.saveProviderSettings({
 			provider: "cline",
-			auth: {
-				accessToken: "stale-access-token",
-				refreshToken: "stale-refresh-token",
-			},
+			apiKey: "fixture-existing",
+			auth: { accessToken: "fixture-access", refreshToken: "fixture-refresh" },
 		});
-
-		await saveManualProviderApiKey(manager, "cline-pass", "manual-api-key");
-
-		// cline-pass inherits auth storage from the "cline" entry, so the key
-		// must land there and the stale tokens must be gone for both providers.
-		const clineSettings = manager.getProviderSettings("cline");
-		expect(clineSettings?.apiKey).toBe("manual-api-key");
-		expect(clineSettings?.auth?.accessToken).toBeUndefined();
-
-		const clinePassSettings = manager.getProviderSettings("cline-pass");
-		expect(getPersistedProviderApiKey("cline-pass", clinePassSettings)).toBe(
-			"manual-api-key",
-		);
-		expect(isProviderConfigured("cline-pass", clinePassSettings)).toBe(true);
-	});
-
-	it("clears stale credentials copied into a direct cline-pass entry", async () => {
-		const manager = createManager();
-		manager.saveProviderSettings({
-			provider: "cline",
-			auth: {
-				accessToken: "stale-access-token",
-				refreshToken: "stale-refresh-token",
-			},
-		});
-		// Provider switching copies the merged settings (including auth) into
-		// a direct cline-pass entry, which shadows the shared "cline" entry.
 		manager.saveProviderSettings({
 			provider: "cline-pass",
-			apiKey: "stale-copied-key",
-			auth: {
-				accessToken: "stale-access-token",
-				refreshToken: "stale-refresh-token",
-			},
+			apiKey: "fixture-copy",
 		});
-
-		await saveManualProviderApiKey(manager, "cline-pass", "manual-api-key");
-
-		const clinePassSettings = manager.getProviderSettings("cline-pass");
-		expect(clinePassSettings?.auth?.accessToken).toBeUndefined();
-		expect(getPersistedProviderApiKey("cline-pass", clinePassSettings)).toBe(
-			"manual-api-key",
-		);
+		const before = JSON.stringify(manager.read());
+		await expect(
+			saveManualProviderApiKey(manager, providerId, "fixture-new"),
+		).rejects.toMatchObject({ code: "cline_cloud_disabled" });
+		expect(JSON.stringify(manager.read())).toBe(before);
 	});
 });

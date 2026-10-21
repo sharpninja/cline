@@ -57,7 +57,7 @@ import { AudioModelBadges } from "./audio-model-badges";
 const EMBEDDED_INPUT_CLASS =
 	"h-7 flex-1 border-0 bg-transparent px-0 text-sm shadow-none outline-none placeholder:text-muted-foreground dark:bg-transparent focus-visible:ring-0";
 
-const FAVORITE_MODELS_STORAGE_KEY = "cline.favorite-provider-models.v1";
+const FAVORITE_MODELS_STORAGE_KEY = "cline-qb.favorite-provider-models.v1";
 
 // Providers whose model lists carry recommended-feed tiers (see the SDK's
 // applyClineFeaturedModels). Only these are worth a per-card list fetch.

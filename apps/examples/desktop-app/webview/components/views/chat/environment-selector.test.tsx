@@ -165,7 +165,7 @@ describe("EnvironmentSelector", () => {
 		);
 		expect(document.body.textContent).not.toContain("Connected");
 		expect(document.body.textContent).toContain("Cloud");
-		expect(document.body.textContent).toContain("Coming soon");
+		expect(document.body.textContent).toContain("Unavailable");
 		expect(menuItemContaining("Cloud").getAttribute("aria-disabled")).toBe(
 			"true",
 		);
@@ -189,7 +189,7 @@ describe("EnvironmentSelector", () => {
 		expect(onAddSshHost).toHaveBeenCalledTimes(1);
 	});
 
-	it("selects Cloud from the environment menu when enabled", async () => {
+	it("qbrain picker policy: refuses Cloud even when a stale flag enables it", async () => {
 		const onSelectExecutionTarget = vi.fn();
 		const onSelectEnvironment = vi.fn();
 		await act(async () =>
@@ -205,14 +205,19 @@ describe("EnvironmentSelector", () => {
 			),
 		);
 		await pointerDown(trigger());
-		expect(document.body.textContent).not.toContain("Coming soon");
+		expect(menuItemContaining("Cloud").getAttribute("aria-disabled")).toBe(
+			"true",
+		);
 		await click(menuItemContaining("Cloud"));
-		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("cloud");
+		expect(onSelectExecutionTarget).not.toHaveBeenCalled();
 		expect(onSelectEnvironment).not.toHaveBeenCalled();
 	});
 
 	it("remembers an explicit Local pick after Cloud falls back to Local", async () => {
-		writeExecutionTargetToWindow("cloud");
+		window.localStorage.setItem(
+			EXECUTION_TARGET_STORAGE_KEY,
+			JSON.stringify({ target: "cloud" }),
+		);
 		const onSelectExecutionTarget = vi.fn(writeExecutionTargetToWindow);
 		const onSelectEnvironment = vi.fn();
 		await act(async () =>
@@ -228,8 +233,8 @@ describe("EnvironmentSelector", () => {
 				/>,
 			),
 		);
-		// Displaying the automatic fallback alone preserves the saved preference.
-		expect(getInitialChatConfig("local").executionTarget).toBe("cloud");
+		// Stale Cloud preference is inert even before an explicit Local selection.
+		expect(getInitialChatConfig("local").executionTarget).toBe("local");
 		await pointerDown(trigger());
 		await click(menuItemContaining("Local"));
 		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("local");
@@ -261,7 +266,10 @@ describe("EnvironmentSelector", () => {
 
 		await pointerDown(trigger());
 		await click(menuItemContaining("Local"));
-		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("local");
+		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith(
+			"local",
+			"local",
+		);
 		expect(onSelectEnvironment).toHaveBeenLastCalledWith("local");
 	});
 
@@ -284,7 +292,7 @@ describe("EnvironmentSelector", () => {
 				/>,
 			),
 		);
-		expect(trigger().title).toBe("Environment: Cloud");
+		expect(trigger().title).toBe("Environment: Cloud unavailable");
 		await pointerDown(trigger());
 		expect(menuItemContaining("Cloud").getAttribute("aria-current")).toBe(
 			"true",
@@ -293,7 +301,9 @@ describe("EnvironmentSelector", () => {
 			false,
 		);
 		await click(menuItemContaining(label));
-		expect(onSelectExecutionTarget).toHaveBeenCalledExactlyOnceWith("local");
+		expect(onSelectExecutionTarget.mock.calls).toEqual([
+			environmentId === "local" ? ["local"] : ["local", environmentId],
+		]);
 		if (environmentId === "local")
 			expect(onSelectEnvironment).not.toHaveBeenCalled();
 		else

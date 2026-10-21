@@ -1,4 +1,5 @@
 "use client";
+import { DESKTOP_WS_ENDPOINT } from "../../desktop-endpoints";
 
 import type {
 	AgendaAutomationPolicy,
@@ -44,8 +45,8 @@ let resolvedEndpointCache: string | null = null;
  *    or an integration test harness.
  * 2. Tauri `get_desktop_backend_endpoint` command — used when running inside
  *    the full Tauri app shell.
- * 3. `NEXT_PUBLIC_SIDECAR_WS_ENDPOINT` (inlined at build time), then fallback
- *    to `ws://127.0.0.1:3126/transport` — the sidecar's default port when
+ * 3. `NEXT_PUBLIC_CLINE_QB_SIDECAR_WS_ENDPOINT` (inlined at build time), then fallback
+ *    to `ws://127.0.0.1:32126/transport` — the sidecar's default port when
  *    running in plain web/dev mode (`bun run dev:sidecar` + `bun run dev:web`).
  */
 export async function resolveDesktopBackendWsEndpoint(): Promise<string> {
@@ -76,8 +77,9 @@ export async function resolveDesktopBackendWsEndpoint(): Promise<string> {
 
 	// 3. Env override, then default sidecar port for local dev mode without
 	// the Tauri bridge.
-	const envEndpoint = process.env.NEXT_PUBLIC_SIDECAR_WS_ENDPOINT?.trim();
-	resolvedEndpointCache = envEndpoint || "ws://127.0.0.1:3126/transport";
+	const envEndpoint =
+		process.env.NEXT_PUBLIC_CLINE_QB_SIDECAR_WS_ENDPOINT?.trim();
+	resolvedEndpointCache = envEndpoint || DESKTOP_WS_ENDPOINT;
 	return resolvedEndpointCache;
 }
 
@@ -237,7 +239,7 @@ function webviewDebugLoggingEnabled(): boolean {
 	try {
 		runtimeEnabled =
 			typeof window !== "undefined" &&
-			window.localStorage.getItem("cline.debugLogs") === "1";
+			window.localStorage.getItem("cline-qb.debugLogs") === "1";
 	} catch {
 		// Some embedded/privacy contexts deny localStorage access.
 	}
@@ -269,7 +271,6 @@ export function writeDesktopDebugLog(payload: unknown): void {
 
 const NATIVE_COMMANDS = new Set([
 	"pick_workspace_directory",
-	"open_mcp_settings_file",
 	"get_update_status",
 	"restart_to_apply_update",
 	"check_for_update_now",

@@ -1,3 +1,4 @@
+import { assertUserConfiguredMcp } from "@cline/shared"
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { sendMcpServersUpdate } from "@core/controller/mcp/subscribeToMcpServers"
 import { getMcpSettingsFilePath as getMcpSettingsFilePathHelper } from "@core/storage/disk"
@@ -391,6 +392,23 @@ export class McpHub {
 		// Remove existing connection if it exists (should never happen, the connection should be deleted beforehand)
 		this.connections = this.connections.filter((conn) => conn.server.name !== name)
 
+		try {
+			assertUserConfiguredMcp(config)
+		} catch (error) {
+			this.connections.push({
+				server: {
+					name,
+					config: JSON.stringify(config),
+					status: "disconnected",
+					disabled: config.disabled,
+					error: error instanceof Error ? error.message : String(error),
+				},
+				client: null as unknown as Client,
+				transport: null as unknown as Transport,
+			})
+			throw error
+		}
+
 		// Validate remote MCP server URL against remote config if blockPersonalRemoteMCPServers is enabled
 		if (config.type !== "stdio" && "url" in config && config.url) {
 			const stateManager = StateManager.get()
@@ -407,7 +425,7 @@ export class McpHub {
 		}
 
 		// Validate local MCP servers based on remote config (enterprise feature)
-		if (config.type === "stdio") {
+		if (config.type === "stdio" && !config.remoteConfigured) {
 			const stateManager = StateManager.get()
 			const remoteConfig = stateManager.getRemoteConfigSettings()
 
@@ -1242,7 +1260,7 @@ export class McpHub {
 			if (!currentConnection) {
 				// New server
 				try {
-					if (config.type === "stdio") {
+					if (config.type === "stdio" && !config.remoteConfigured) {
 						this.setupFileWatcher(name, config)
 					}
 					await this.connectToServer(name, config, "rpc")
@@ -1256,7 +1274,7 @@ export class McpHub {
 				// Existing server with changed connection config,
 				// or an unauthenticated server whose OAuth tokens just appeared (e.g. CLI authorized it)
 				try {
-					if (config.type === "stdio") {
+					if (config.type === "stdio" && !config.remoteConfigured) {
 						this.setupFileWatcher(name, config)
 					}
 					await this.deleteConnection(name) // Don't clear OAuth - just reconnecting with new config
@@ -1318,7 +1336,7 @@ export class McpHub {
 			if (!currentConnection) {
 				// New server
 				try {
-					if (config.type === "stdio") {
+					if (config.type === "stdio" && !config.remoteConfigured) {
 						this.setupFileWatcher(name, config)
 					}
 					await this.connectToServer(name, config, "internal")
@@ -1337,12 +1355,15 @@ export class McpHub {
 				// or an unauthenticated server whose OAuth tokens just appeared in the settings
 				// file (e.g. the CLI or another window completed authorization for it)
 				try {
-					// Set status to "connecting" and notify webview before restart (same pattern as restartConnection)
-					currentConnection.server.status = "connecting"
-					currentConnection.server.error = ""
-					await this.notifyWebviewOfServerChanges()
+					// Managed entries must leave the usable connection set before
+					// any notification await can admit another tool request.
+					if (!config.remoteConfigured) {
+						currentConnection.server.status = "connecting"
+						currentConnection.server.error = ""
+						await this.notifyWebviewOfServerChanges()
+					}
 
-					if (config.type === "stdio") {
+					if (config.type === "stdio" && !config.remoteConfigured) {
 						this.setupFileWatcher(name, config)
 					}
 					await this.deleteConnection(name)
@@ -1409,14 +1430,12 @@ export class McpHub {
 		// serverGainedOAuthTokens in updateServerConnections.
 		const {
 			autoApprove: _oldAutoApprove,
-			remoteConfigured: _oldRemoteConfigured,
 			oauth: _oldOauth,
 			metadata: _oldMetadata,
 			...oldConnectionConfig
 		} = oldConfig as McpServerConfig & { oauth?: unknown; metadata?: unknown }
 		const {
 			autoApprove: _newAutoApprove,
-			remoteConfigured: _newRemoteConfigured,
 			oauth: _newOauth,
 			metadata: _newMetadata,
 			...newConnectionConfig
@@ -2139,6 +2158,8 @@ export class McpHub {
 		if (!connection) {
 			throw new Error(`No connection found for server: ${serverName}`)
 		}
+
+		assertUserConfiguredMcp(JSON.parse(connection.server.config))
 
 		// Show "pending" in the UI while the user is off in the browser
 		connection.server.oauthAuthStatus = "pending"

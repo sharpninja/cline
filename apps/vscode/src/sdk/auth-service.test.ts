@@ -1,884 +1,312 @@
-// Tests for the SDK-backed AuthService (Step 6: Auth & Account Flows)
-//
-// These tests verify the auth service's core logic:
-// - Token persistence (read/write/clear from secrets)
-// - Auth state management (authenticated/unauthenticated)
-// - Auth info conversion (SDK OAuthCredentials → ClineAuthInfo)
-// - Logout flow
-// - Streaming subscription management
-// - workos: prefix handling
+// AC-QB-016/017: old Cline account state cannot enable hosted services.
+// AC-QB-018: direct-provider auth remains independent of Cline accounts.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { AuthService, LogoutReason } from "./auth-service"
 
-import path from "node:path"
-import { getValidClineCredentials, type ITelemetryService, type OAuthCredentials } from "@cline/core"
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import { AuthService, type ClineAuthInfo, LogoutReason } from "./auth-service"
-
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
-const mockFeatureFlagsPoll = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
-const mockIdentifyAccount = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
-const mockCaptureAuthLoggedOut = vi.hoisted(() => vi.fn())
-const mockSdkTelemetry = { capture: vi.fn() } as unknown as ITelemetryService
-
-// Mock StateManager
-const mockSecrets = new Map<string, string>()
-const mockGlobalState = vi.hoisted(() => new Map<string, unknown>())
-vi.mock("@/core/storage/StateManager", () => ({
-	StateManager: {
-		get: () => ({
-			getSecretKey: (key: string) => mockSecrets.get(key) ?? undefined,
-			setSecret: (key: string, value: string | undefined) => {
-				if (value === undefined) {
-					mockSecrets.delete(key)
-				} else {
-					mockSecrets.set(key, value)
-				}
-			},
-			getGlobalSettingsKey: () => "act",
-			setGlobalState: (key: string, value: unknown) => {
-				mockGlobalState.set(key, value)
-			},
-		}),
-	},
+const f = vi.hoisted(() => ({
+	clineLogin: vi.fn(),
+	refresh: vi.fn(),
+	hostedGet: vi.fn(),
+	fetch: vi.fn(),
+	bannerInit: vi.fn(),
+	bannerUpdate: vi.fn(),
+	flags: vi.fn(),
+	identify: vi.fn(),
+	getSettings: vi.fn(),
+	saveSettings: vi.fn(),
+	register: vi.fn(),
+	directLogin: vi.fn(),
+	saveCodex: vi.fn(),
+	clearCodex: vi.fn(),
+	ocaLogin: vi.fn(),
+	ocaCallback: vi.fn(),
+	oldOcaLogin: vi.fn(),
+	open: vi.fn(),
+	message: vi.fn(),
+	getApi: vi.fn(),
+	setApi: vi.fn(),
+	settings: new Map<string, any>(),
 }))
-
-// Mock ClineEnv
+vi.mock("@cline/core", () => ({
+	createOAuthClientCallbacks: (options: any) => options,
+	loginClineOAuth: f.clineLogin,
+	getValidClineCredentials: f.refresh,
+	loginOcaOAuth: f.oldOcaLogin,
+	loginOpenAICodex: f.directLogin,
+	getProviderAuthStorageId: (provider: string) => (provider === "cline-pass" ? "cline" : provider),
+	sdkDebug: vi.fn(),
+	hashSecret: () => "redacted",
+}))
+vi.mock("axios", () => ({ default: { get: f.hostedGet } }))
+vi.mock("@/shared/net", () => ({ fetch: f.fetch, getAxiosSettings: () => ({}) }))
 vi.mock("@/config", () => ({
 	ClineEnv: {
-		config: () => ({
-			apiBaseUrl: "https://api.cline.bot",
-			appBaseUrl: "https://app.cline.bot",
-		}),
+		config: () => ({ environment: "local", apiBaseUrl: "https://api.cline.bot", appBaseUrl: "https://app.cline.bot" }),
 	},
 }))
-
-// Mock grpc-handler
-vi.mock("@/core/controller/grpc-handler", () => ({
-	getRequestRegistry: () => ({
-		registerRequest: vi.fn(),
-	}),
+vi.mock("@/services/EnvUtils", () => ({ buildBasicClineHeaders: async () => ({}) }))
+vi.mock("@/services/banner/BannerService", () => ({ BannerService: { initialize: f.bannerInit, onAuthUpdate: f.bannerUpdate } }))
+vi.mock("@/services/feature-flags", () => ({ featureFlagsService: { poll: f.flags } }))
+vi.mock("@/services/telemetry", () => ({ telemetryService: { identifyAccount: f.identify, captureAuthLoggedOut: vi.fn() } }))
+vi.mock("@/services/auth/oca/OcaAuthService", () => ({
+	OcaAuthService: { getInstance: () => ({ createAuthRequest: f.ocaLogin, handleAuthCallback: f.ocaCallback }) },
 }))
-
-// Mock HostProvider
+vi.mock("@/integrations/openai-codex/oauth", () => ({
+	openAiCodexOAuthManager: { saveCredentials: f.saveCodex, clearCredentials: f.clearCodex },
+}))
+vi.mock("@/core/controller/grpc-handler", () => ({ getRequestRegistry: () => ({ registerRequest: f.register }) }))
 vi.mock("@/hosts/host-provider", () => ({
 	HostProvider: {
-		get: () => ({
-			getCallbackUrl: async (path: string) => `vscode://cline.cline${path}`,
-		}),
+		window: { showMessage: f.message },
+		get: () => ({ getCallbackUrl: async () => "vscode://sharpninja.cline-qb/auth" }),
 	},
 }))
-
-// Mock openExternal
-vi.mock("@/utils/env", () => ({
-	openExternal: vi.fn(),
+vi.mock("@/core/storage/StateManager", () => ({
+	StateManager: { get: () => ({ getApiConfiguration: f.getApi, setApiConfiguration: f.setApi, setGlobalState: vi.fn() }) },
 }))
-
-// Mock net
-vi.mock("@/shared/net", () => ({
-	fetch: vi.fn(),
-	getAxiosSettings: () => ({}),
-}))
-
-// Mock buildBasicClineHeaders
-vi.mock("@/services/EnvUtils", () => ({
-	buildBasicClineHeaders: async () => ({}),
-}))
-
-// Mock feature flags
-vi.mock("@/services/feature-flags", () => ({
-	featureFlagsService: {
-		poll: mockFeatureFlagsPoll,
-	},
-}))
-
-vi.mock("@/services/telemetry", () => ({
-	telemetryService: {
-		identifyAccount: mockIdentifyAccount,
-		captureAuthLoggedOut: mockCaptureAuthLoggedOut,
-	},
-}))
-
-// Mock axios
-vi.mock("axios", () => ({
-	default: {
-		get: vi.fn(),
-	},
-}))
-
-const mockLoginClineOAuth = vi.hoisted(() => vi.fn())
-
-// Mock @cline/core OAuth functions
-vi.mock("@cline/core", async () => ({
-	sdkDebug: () => {},
-	hashSecret: () => "hashed",
-	createOAuthClientCallbacks: (opts: {
-		onOutput?: (message: string) => void
-		onPrompt: () => void
-		openUrl?: (url: string) => void | Promise<void>
-	}) => ({
-		onAuth: ({ url, instructions }: { url: string; instructions?: string }) => {
-			opts.onOutput?.(instructions ?? "Complete sign-in in your browser.")
-			void opts.openUrl?.(url)
-			opts.onOutput?.(url)
-		},
-		onPrompt: opts.onPrompt,
-	}),
-	loginClineOAuth: mockLoginClineOAuth,
-	loginOcaOAuth: vi.fn(),
-	loginOpenAICodex: vi.fn(),
-	refreshClineToken: vi.fn(),
-	getValidClineCredentials: vi.fn(),
-	// Mirrors the SDK registry: cline-pass stores credentials under "cline".
-	getProviderAuthStorageId: (providerId: string) =>
-		providerId === "cline" || providerId === "cline-pass" ? "cline" : undefined,
-}))
-
-// Stateful in-memory provider-settings store. Cline credentials are persisted
-// to providers.json (via the SDK's ProviderSettingsManager), not to secrets, so
-// the credential round-trip tests exercise this store.
-const mockProviderSettings = new Map<string, Record<string, unknown>>()
-let mockLastUsedProvider: string | undefined
 vi.mock("./provider-migration", () => ({
 	getProviderSettingsManager: () => ({
-		getProviderSettings: (provider: string) => mockProviderSettings.get(provider),
-		read: () => ({ lastUsedProvider: mockLastUsedProvider }),
-		saveProviderSettings: (settings: Record<string, unknown>, options?: { setLastUsed?: boolean }) => {
-			const provider = settings.provider as string
-			mockProviderSettings.set(provider, { ...settings })
-			if (options?.setLastUsed !== false) {
-				mockLastUsedProvider = provider
-			}
-		},
+		getProviderSettings: f.getSettings,
+		saveProviderSettings: f.saveSettings,
+		read: () => ({ lastUsedProvider: "openai-codex" }),
 	}),
 }))
+vi.mock("@/utils/env", () => ({ openExternal: f.open }))
+vi.mock("@/shared/services/Logger", () => ({ Logger: { log: vi.fn(), error: vi.fn(), warn: vi.fn() } }))
 
-// ---------------------------------------------------------------------------
-// Test helpers — typed access to private members for testing
-// ---------------------------------------------------------------------------
-
-/** Type that exposes private members for test access */
-interface AuthServiceTestAccess {
-	_clineAuthInfo: ClineAuthInfo | null
-	_authenticated: boolean
-	_activeAuthStatusUpdateHandlers: Map<string, unknown>
-	instance: AuthService | null
+let service: AuthService
+const credentials = {
+	access: "synthetic-direct-access",
+	refresh: "synthetic-direct-refresh",
+	expires: 1700000000000,
+	accountId: "direct-account",
+	email: "test@example.invalid",
 }
-
-function testAccess(service: AuthService): AuthServiceTestAccess {
-	// biome-ignore lint/suspicious/noExplicitAny: test-only access to private members
-	return service as any
+const legacy = {
+	provider: "cline",
+	auth: {
+		accessToken: "workos:synthetic-old-token",
+		refreshToken: "synthetic-old-refresh",
+		expiresAt: 1,
+		metadata: { arbitrary: "preserve" },
+	},
 }
-
-function resetSingleton(): void {
-	// biome-ignore lint/suspicious/noExplicitAny: test-only reset of singleton
+function injectLegacy() {
+	Object.assign(service, {
+		_authenticated: true,
+		_clineAuthInfo: {
+			idToken: "synthetic-stale",
+			refreshToken: "synthetic-refresh",
+			expiresAt: 1,
+			provider: "cline",
+			userInfo: { id: "old-user", organizations: [{ active: true, organizationId: "old-org" }] },
+		},
+	})
+}
+function noCloud() {
+	for (const spy of [f.clineLogin, f.refresh, f.hostedGet, f.bannerInit, f.bannerUpdate, f.flags, f.identify, f.oldOcaLogin])
+		expect(spy).not.toHaveBeenCalled()
+}
+beforeEach(() => {
+	vi.resetAllMocks()
 	;(AuthService as any).instance = null
-}
+	f.settings.clear()
+	f.settings.set("cline", structuredClone(legacy))
+	f.getSettings.mockImplementation((provider: string) => f.settings.get(provider))
+	f.saveSettings.mockImplementation((settings: any) => f.settings.set(settings.provider, structuredClone(settings)))
+	f.clineLogin.mockRejectedValue(new Error("Hosted login intercepted"))
+	f.refresh.mockResolvedValue(null)
+	f.hostedGet.mockResolvedValue({ data: { data: { id: "old-user", organizations: [] } } })
+	f.bannerUpdate.mockResolvedValue(undefined)
+	f.directLogin.mockResolvedValue(credentials)
+	f.oldOcaLogin.mockResolvedValue(credentials)
+	f.saveCodex.mockResolvedValue(undefined)
+	f.clearCodex.mockResolvedValue(undefined)
+	f.ocaLogin.mockResolvedValue({ value: "direct-oca-url" })
+	f.ocaCallback.mockResolvedValue(undefined)
+	f.getApi.mockReturnValue({ planModeApiProvider: "anthropic", actModeApiProvider: "anthropic", other: "preserved" })
+	service = AuthService.getInstance()
+})
+afterEach(() => vi.unstubAllEnvs())
 
-// ---------------------------------------------------------------------------
-// Test fixtures
-// ---------------------------------------------------------------------------
-
-function createTestAuthInfo(overrides?: Partial<ClineAuthInfo>): ClineAuthInfo {
-	return {
-		idToken: "test-access-token",
-		refreshToken: "test-refresh-token",
-		expiresAt: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now (seconds)
-		userInfo: {
-			id: "user-123",
-			email: "test@example.com",
-			displayName: "Test User",
-			organizations: [
-				{
-					active: true,
-					memberId: "member-1",
-					name: "Personal",
-					organizationId: "org-personal",
-					roles: ["owner"],
-				},
-			],
-		},
-		provider: "cline",
-		startedAt: Date.now(),
-		...overrides,
+describe("Cline account exclusion", () => {
+	it("keeps singleton construction local even with a controller", () => {
+		expect(AuthService.getInstance({} as any)).toBe(service)
+		noCloud()
+	})
+	for (const seeded of [false, true]) {
+		it("never exposes a hosted identity or token, legacy=" + seeded, async () => {
+			if (seeded) injectLegacy()
+			expect(service.getInfo().user).toBeUndefined()
+			expect(service.getActiveOrganizationId()).toBeNull()
+			expect(service.getUserOrganizations()).toBeUndefined()
+			expect(service.getProviderName()).toBeNull()
+			expect(await service.getAuthToken()).toBeNull()
+			noCloud()
+		})
+		it("restore/replay/sign-out preserve stored credentials, legacy=" + seeded, async () => {
+			if (seeded) injectLegacy()
+			const before = JSON.stringify([...f.settings])
+			await service.restoreRefreshTokenAndRetrieveAuthInfo()
+			await service.restoreRefreshTokenAndRetrieveAuthInfo()
+			await service.handleDeauth(LogoutReason.USER_INITIATED)
+			expect(service.getInfo().user).toBeUndefined()
+			expect(JSON.stringify([...f.settings])).toBe(before)
+			expect(f.getSettings).not.toHaveBeenCalled()
+			expect(f.saveSettings).not.toHaveBeenCalled()
+			noCloud()
+		})
 	}
-}
-
-function createTestOAuthCredentials(): OAuthCredentials {
-	return {
-		access: "oauth-access-token",
-		refresh: "oauth-refresh-token",
-		expires: Date.now() + 3600 * 1000, // 1 hour from now (ms)
-		accountId: "acct-456",
-		email: "oauth@example.com",
-		metadata: {
-			provider: "workos",
-			sessionStartedAtMs: 1_700_000_000_000,
-			tokenType: "Bearer",
-			userInfo: { email: "oauth@example.com" },
-		},
-	}
-}
-
-async function waitForCondition(condition: () => boolean): Promise<void> {
-	for (let i = 0; i < 20; i++) {
-		if (condition()) {
-			return
+	for (const strict of [false, true])
+		for (const e2e of ["false", "true"]) {
+			it("rejects hosted sign-in before browser or mock login, strict=" + strict + ", E2E=" + e2e, async () => {
+				vi.stubEnv("E2E_TEST", e2e)
+				injectLegacy()
+				await expect(service.createAuthRequest(strict)).rejects.toMatchObject({ code: "cline_account_disabled" })
+				expect(f.open).not.toHaveBeenCalled()
+				expect(f.fetch).not.toHaveBeenCalled()
+				expect(f.saveSettings).not.toHaveBeenCalled()
+				noCloud()
+			})
 		}
-		await new Promise((resolve) => setTimeout(resolve, 0))
+	for (const code of ["old-callback", "", "malformed?code=foo"]) {
+		it("rejects stale/native hosted callbacks: " + code, async () => {
+			await expect(service.handleAuthCallback(code, "workos")).rejects.toMatchObject({ code: "cline_account_disabled" })
+			expect(f.fetch).not.toHaveBeenCalled()
+			expect(f.saveSettings).not.toHaveBeenCalled()
+			noCloud()
+		})
 	}
-	throw new Error("Timed out waiting for condition")
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe("AuthService", () => {
-	let authService: AuthService
-
-	beforeEach(() => {
-		// Reset the singleton between tests
-		resetSingleton()
-		authService = AuthService.getInstance(undefined, mockSdkTelemetry)
-		mockSecrets.clear()
-		mockGlobalState.clear()
-		mockProviderSettings.clear()
-		mockLastUsedProvider = undefined
-		vi.clearAllMocks()
+	it("pushes local signed-out state immediately and once per controller", async () => {
+		injectLegacy()
+		const controller = { postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() }
+		const a = vi.fn(),
+			b = vi.fn()
+		await service.subscribeToAuthStatusUpdate(controller as any, {}, a, "request-a")
+		expect(a).toHaveBeenCalledWith({ user: undefined }, false)
+		await service.subscribeToAuthStatusUpdate(controller as any, {}, b, "request-b")
+		controller.postStateToWebview.mockClear()
+		await service.sendAuthStatusUpdate()
+		expect(controller.postStateToWebview).toHaveBeenCalledTimes(1)
+		expect(b).toHaveBeenCalledWith({ user: undefined }, false)
+		noCloud()
 	})
-
-	describe("singleton pattern", () => {
-		it("returns the same instance on multiple calls", () => {
-			const instance1 = AuthService.getInstance()
-			const instance2 = AuthService.getInstance()
-			expect(instance1).toBe(instance2)
-		})
+	it("honors request cleanup without delivering later updates", async () => {
+		const stream = vi.fn()
+		await service.subscribeToAuthStatusUpdate(
+			{ postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() } as any,
+			{},
+			stream,
+			"cleanup",
+		)
+		expect(f.register).toHaveBeenCalledWith(
+			"cleanup",
+			expect.any(Function),
+			{ type: "authStatusUpdate_subscription" },
+			stream,
+		)
+		f.register.mock.calls[0][1]()
+		stream.mockClear()
+		await service.sendAuthStatusUpdate()
+		expect(stream).not.toHaveBeenCalled()
+		noCloud()
 	})
-
-	describe("getInfo() — auth state for webview", () => {
-		it("returns unauthenticated state when not logged in", () => {
-			const info = authService.getInfo()
-			// Unset proto message fields are `undefined`, not `null`.
-			expect(info.user).toBeUndefined()
-		})
-
-		it("returns authenticated state with user info when logged in", () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			const info = authService.getInfo()
-			expect(info.user).not.toBeNull()
-			expect(info.user?.uid).toBe("user-123")
-			expect(info.user?.email).toBe("test@example.com")
-			expect(info.user?.displayName).toBe("Test User")
-		})
-
-		it("returns unauthenticated state when _authenticated is false even with auth info", () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = false
-
-			const info = authService.getInfo()
-			expect(info.user).toBeUndefined()
-		})
-	})
-
-	describe("getActiveOrganizationId()", () => {
-		it("returns null when not authenticated", () => {
-			expect(authService.getActiveOrganizationId()).toBeNull()
-		})
-
-		it("returns the active organization ID when authenticated", () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-
-			expect(authService.getActiveOrganizationId()).toBe("org-personal")
-		})
-
-		it("returns null when no active organization exists", () => {
-			const authInfo = createTestAuthInfo({
-				userInfo: {
-					...createTestAuthInfo().userInfo,
-					organizations: [
-						{
-							active: false,
-							memberId: "member-1",
-							name: "Personal",
-							organizationId: "org-personal",
-							roles: ["owner"],
-						},
-					],
-				},
-			})
-			testAccess(authService)._clineAuthInfo = authInfo
-
-			expect(authService.getActiveOrganizationId()).toBeNull()
-		})
-	})
-
-	describe("getUserOrganizations()", () => {
-		it("returns undefined when not authenticated", () => {
-			expect(authService.getUserOrganizations()).toBeUndefined()
-		})
-
-		it("returns organizations when authenticated", () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-
-			const orgs = authService.getUserOrganizations()
-			expect(orgs).toHaveLength(1)
-			expect(orgs?.[0].organizationId).toBe("org-personal")
-		})
-	})
-
-	describe("getProviderName()", () => {
-		it("returns null when not authenticated", () => {
-			expect(authService.getProviderName()).toBeNull()
-		})
-
-		it("returns the provider name when authenticated", () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-
-			expect(authService.getProviderName()).toBe("cline")
-		})
-	})
-
-	describe("getAuthToken()", () => {
-		it("returns null when not authenticated", async () => {
-			expect(await authService.getAuthToken()).toBeNull()
-		})
-
-		it("returns workos:-prefixed token when authenticated", async () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			const token = await authService.getAuthToken()
-			expect(token).toBe("workos:test-access-token")
-		})
-
-		it("returns null when token is expired and refresh fails", async () => {
-			const authInfo = createTestAuthInfo({
-				expiresAt: Math.floor(Date.now() / 1000) - 100, // expired
-			})
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			// No refresh token → can't refresh
-			authInfo.refreshToken = undefined
-			const token = await authService.getAuthToken()
-			expect(token).toBeNull()
-		})
-
-		it("returns the refreshed token when an already-expired token refreshes successfully", async () => {
-			// Regression test: the process sat idle past token expiry (e.g. across
-			// a laptop suspend), so the refresh happens after expiresAt has passed.
-			testAccess(authService)._clineAuthInfo = createTestAuthInfo({
-				expiresAt: Math.floor(Date.now() / 1000) - 100, // already expired
-			})
-			testAccess(authService)._authenticated = true
-			vi.mocked(getValidClineCredentials).mockResolvedValue(createTestOAuthCredentials())
-
-			const token = await authService.getAuthToken()
-			expect(token).toBe("workos:oauth-access-token")
-		})
-
-		it("does not emit its own logout event when the refresh token is rejected mid-session", async () => {
-			testAccess(authService)._clineAuthInfo = createTestAuthInfo({
-				expiresAt: Math.floor(Date.now() / 1000) - 100, // expired → forces refresh
-			})
-			testAccess(authService)._authenticated = true
-			// null models an invalid-grant rejection; transient failures throw.
-			// The SDK resolver owns the user.auth_logged_out (token_invalid)
-			// event for this case — the adapter must stay silent or the event
-			// double-counts (see the boundary test below with the real resolver).
-			vi.mocked(getValidClineCredentials).mockResolvedValue(null)
-
-			const token = await authService.getAuthToken()
-
-			expect(token).toBeNull()
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(mockCaptureAuthLoggedOut).not.toHaveBeenCalled()
-		})
-
-		it("still rejects a token that comes back from refresh already expired", async () => {
-			testAccess(authService)._clineAuthInfo = createTestAuthInfo({
-				expiresAt: Math.floor(Date.now() / 1000) - 100, // already expired
-			})
-			testAccess(authService)._authenticated = true
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				...createTestOAuthCredentials(),
-				expires: Date.now() - 1000, // refresh returned an expired token (ms)
-			})
-
-			const token = await authService.getAuthToken()
-			expect(token).toBeNull()
-		})
-	})
-
-	describe("createAuthRequest()", () => {
-		it("returns the SDK device auth instruction so the webview can display the browser confirmation code", async () => {
-			mockLoginClineOAuth.mockImplementationOnce(async ({ callbacks, useWorkOSDeviceAuth }) => {
-				expect(useWorkOSDeviceAuth).toBe(true)
-				callbacks.onAuth({
-					url: "https://example.com/device?user_code=ABCD-EFGH",
-					instructions: "Enter this code in your browser: ABCD-EFGH",
-				})
-
-				return createTestOAuthCredentials()
-			})
-
-			const response = await authService.createAuthRequest()
-
-			expect(response.value).toBe("Enter this code in your browser: ABCD-EFGH")
-		})
-
-		it("persists the session start time in Cline auth metadata", async () => {
-			mockLoginClineOAuth.mockImplementationOnce(async ({ callbacks }) => {
-				callbacks.onAuth({
-					url: "https://example.com/device?user_code=ABCD-EFGH",
-					instructions: "Enter this code in your browser: ABCD-EFGH",
-				})
-
-				return createTestOAuthCredentials()
-			})
-
-			await authService.createAuthRequest()
-			await waitForCondition(() => mockProviderSettings.has("cline"))
-
-			const persisted = mockProviderSettings.get("cline") as { auth?: { metadata?: Record<string, unknown> } }
-			expect(persisted.auth?.metadata).toMatchObject({
-				provider: "workos",
-				sessionStartedAtMs: 1_700_000_000_000,
-				tokenType: "Bearer",
-				userInfo: { email: "oauth@example.com" },
-			})
-			expect(persisted.auth?.metadata).not.toHaveProperty("startedAt")
-		})
-
-		it("marks the welcome view completed only after OAuth succeeds (not when the URL opens)", async () => {
-			let resolveLogin!: (credentials: OAuthCredentials) => void
-			const loginCompleted = new Promise<OAuthCredentials>((resolve) => {
-				resolveLogin = resolve
-			})
-			mockLoginClineOAuth.mockImplementationOnce(async ({ callbacks }) => {
-				callbacks.onAuth({
-					url: "https://example.com/device?user_code=ABCD-EFGH",
-					instructions: "Enter this code in your browser: ABCD-EFGH",
-				})
-				return loginCompleted
-			})
-
-			// createAuthRequest resolves at URL-open time; onboarding must NOT be
-			// marked complete yet (the user may abandon the browser sign-in).
-			await authService.createAuthRequest()
-			expect(mockGlobalState.get("welcomeViewCompleted")).toBeUndefined()
-
-			// Complete the OAuth exchange — now the flag must flip.
-			resolveLogin(createTestOAuthCredentials())
-			await waitForCondition(() => mockGlobalState.get("welcomeViewCompleted") === true)
-		})
-
-		it("does not mark the welcome view completed when OAuth fails", async () => {
-			mockLoginClineOAuth.mockImplementationOnce(async ({ callbacks }) => {
-				callbacks.onAuth({
-					url: "https://example.com/device?user_code=ABCD-EFGH",
-					instructions: "Enter this code in your browser: ABCD-EFGH",
-				})
-				throw new Error("login aborted")
-			})
-
-			await authService.createAuthRequest()
-
-			// Give the background login block a few ticks to settle.
-			await new Promise((resolve) => setTimeout(resolve, 0))
-			await new Promise((resolve) => setTimeout(resolve, 0))
-			expect(mockGlobalState.get("welcomeViewCompleted")).toBeUndefined()
-		})
-	})
-
-	describe("handleDeauth() — logout", () => {
-		it("clears auth state and pushes unauthenticated state", async () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			// Seed persisted Cline credentials in providers.json.
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: { accessToken: "workos:test-access-token", refreshToken: "test-refresh-token", accountId: "user-123" },
-			})
-
-			await authService.handleDeauth(LogoutReason.USER_INITIATED)
-
-			// In-memory auth state should be cleared.
-			expect(testAccess(authService)._clineAuthInfo).toBeNull()
-			expect(testAccess(authService)._authenticated).toBe(false)
-
-			// Persisted credentials should be cleared from providers.json.
-			expect(mockProviderSettings.get("cline")?.auth).toBeUndefined()
-			expect(mockCaptureAuthLoggedOut).toHaveBeenCalledWith("cline", LogoutReason.USER_INITIATED)
-		})
-	})
-
-	describe("token persistence (providers.json)", () => {
-		// Cline OAuth credentials are persisted to providers.json via the SDK's
-		// ProviderSettingsManager, not to VSCode secrets. These tests exercise
-		// the round-trip through the public restore/logout surface.
-
-		it("restores credentials persisted in providers.json", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: {
-					accessToken: "workos:persisted-access-token",
-					refreshToken: "persisted-refresh-token",
-					accountId: "user-123",
-				},
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				access: "persisted-access-token",
-				refresh: "persisted-refresh-token",
-				expires: Date.now() + 3600 * 1000,
-				accountId: "user-123",
-				email: "test@example.com",
-			})
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(true)
-			expect(testAccess(authService)._clineAuthInfo?.idToken).toBe("persisted-access-token")
-			expect(testAccess(authService)._clineAuthInfo?.startedAt).toBeUndefined()
-			expect(
-				(mockProviderSettings.get("cline")?.auth as { metadata?: Record<string, unknown> } | undefined)?.metadata,
-			).toBeUndefined()
-			expect(getValidClineCredentials).toHaveBeenCalledWith(
-				expect.any(Object),
-				expect.objectContaining({ telemetry: mockSdkTelemetry }),
-				expect.any(Object),
-			)
-		})
-
-		it("does not let undefined incoming metadata erase existing metadata on restore refresh", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: {
-					accessToken: "workos:persisted-access-token",
-					refreshToken: "persisted-refresh-token",
-					accountId: "user-123",
-					metadata: {
-						provider: "workos",
-						sessionStartedAtMs: 1_700_000_000_000,
-						tokenType: "Bearer",
-					},
-				},
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				access: "persisted-access-token",
-				refresh: "persisted-refresh-token",
-				expires: Date.now() + 3600 * 1000,
-				accountId: "user-123",
-				email: "test@example.com",
-				metadata: {
-					provider: undefined,
-					sessionStartedAtMs: 1_700_000_000_000,
-					tokenType: "Bearer",
-				},
-			})
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			const persisted = mockProviderSettings.get("cline") as { auth?: { metadata?: Record<string, unknown> } }
-			expect(persisted.auth?.metadata).toMatchObject({
-				provider: "workos",
-				sessionStartedAtMs: 1_700_000_000_000,
-				tokenType: "Bearer",
-			})
-		})
-
-		it("keeps a ClinePass last-used selection when credentials are refreshed on restore (#13501)", async () => {
-			mockLastUsedProvider = "cline-pass"
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: {
-					accessToken: "workos:persisted-access-token",
-					refreshToken: "persisted-refresh-token",
-					accountId: "user-123",
-				},
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				access: "refreshed-access-token",
-				refresh: "refreshed-refresh-token",
-				expires: Date.now() + 3600 * 1000,
-				accountId: "user-123",
-				email: "test@example.com",
-			})
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(true)
-			expect(mockLastUsedProvider).toBe("cline-pass")
-		})
-
-		it("claims the last-used slot on restore when no cline-backed provider is selected", async () => {
-			mockLastUsedProvider = undefined
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: {
-					accessToken: "workos:persisted-access-token",
-					refreshToken: "persisted-refresh-token",
-					accountId: "user-123",
-				},
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				access: "refreshed-access-token",
-				refresh: "refreshed-refresh-token",
-				expires: Date.now() + 3600 * 1000,
-				accountId: "user-123",
-				email: "test@example.com",
-			})
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(mockLastUsedProvider).toBe("cline")
-		})
-
-		it("sets unauthenticated state when providers.json has no Cline auth", async () => {
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(testAccess(authService)._clineAuthInfo).toBeNull()
-		})
-
-		it("clears persisted credentials when stored tokens are no longer valid", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: { accessToken: "workos:stale", refreshToken: "stale-refresh", accountId: "user-123" },
-			})
-			// getValidClineCredentials returning null models an unrecoverable token.
-			vi.mocked(getValidClineCredentials).mockResolvedValue(null)
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(testAccess(authService)._clineAuthInfo).toBeNull()
-			expect(mockProviderSettings.get("cline")?.auth).toBeUndefined()
-			// The SDK resolver owns the token_invalid event — no adapter emission.
-			expect(mockCaptureAuthLoggedOut).not.toHaveBeenCalled()
-		})
-	})
-
-	describe("restoreRefreshTokenAndRetrieveAuthInfo()", () => {
-		it("strips the workos: prefix from the persisted access token", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: { accessToken: "workos:raw-access-token", refreshToken: "r", accountId: "user-123" },
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue({
-				access: "raw-access-token",
-				refresh: "r",
-				expires: Date.now() + 3600 * 1000,
-				accountId: "user-123",
-				email: "test@example.com",
-			})
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._clineAuthInfo?.idToken).toBe("raw-access-token")
-		})
-
-		it("sets unauthenticated state when no credentials exist", async () => {
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(testAccess(authService)._clineAuthInfo).toBeNull()
-			// Startup with nothing stored is not a logout — no event.
-			expect(mockCaptureAuthLoggedOut).not.toHaveBeenCalled()
-		})
-
-		it("reports nothing when refreshing the stored session fails transiently", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: { accessToken: "workos:stale", refreshToken: "stale-refresh", accountId: "user-123" },
-			})
-			// The resolver throws only on transient failures (network/timeout/5xx);
-			// stored credentials are kept and the next refresh recovers, so an
-			// offline startup must not book as a logout. (The SDK reports these
-			// as user.auth_refresh_soft_failure.)
-			vi.mocked(getValidClineCredentials).mockRejectedValue(new Error("fetch failed"))
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(mockProviderSettings.get("cline")?.auth).toBeDefined()
-			expect(mockCaptureAuthLoggedOut).not.toHaveBeenCalled()
-		})
-
-		it("reports restore_error when restore fails outside the credential refresh", async () => {
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: { accessToken: "workos:stale", refreshToken: "stale-refresh", accountId: "user-123" },
-			})
-			vi.mocked(getValidClineCredentials).mockResolvedValue(createTestOAuthCredentials())
-			vi.spyOn(authService, "sendAuthStatusUpdate").mockRejectedValue(new Error("state push failed"))
-
-			await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(mockCaptureAuthLoggedOut).toHaveBeenCalledTimes(1)
-			expect(mockCaptureAuthLoggedOut).toHaveBeenCalledWith("cline", LogoutReason.RESTORE_ERROR)
-		})
-
-		it("emits exactly one auth_logged_out — from the SDK resolver — when the stored refresh token is rejected", async () => {
-			// Boundary test: run the REAL getValidClineCredentials (the module
-			// mock normally hides its telemetry) so a reintroduced adapter-side
-			// emission would surface as a second event here. The specifier is a
-			// variable so tsc doesn't pull the SDK sources into this project's
-			// program (same reason the @cline/core vitest stub is tsc-excluded);
-			// vitest resolves it at runtime.
-			const realClineAuthModulePath = path.resolve(import.meta.dirname, "../../../../sdk/packages/core/src/auth/cline.ts")
-			const { getValidClineCredentials: realGetValidClineCredentials } = (await import(
-				/* @vite-ignore */ realClineAuthModulePath
-			)) as { getValidClineCredentials: typeof getValidClineCredentials }
-			vi.mocked(getValidClineCredentials).mockImplementation(realGetValidClineCredentials as never)
-			// The resolver refreshes over global fetch; reject the refresh token.
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(
-					async () =>
-						new Response(JSON.stringify({ error: "invalid_grant", error_description: "refresh expired" }), {
-							status: 401,
-							headers: { "Content-Type": "application/json" },
-						}),
-				),
-			)
-			mockProviderSettings.set("cline", {
-				provider: "cline",
-				auth: {
-					accessToken: "workos:stale",
-					refreshToken: "stale-refresh",
-					accountId: "user-123",
-					expiresAt: Date.now() - 1000, // expired → forces refresh
-				},
-			})
-
-			try {
-				await authService.restoreRefreshTokenAndRetrieveAuthInfo()
-			} finally {
-				vi.unstubAllGlobals()
-			}
-
-			expect(testAccess(authService)._authenticated).toBe(false)
-			expect(mockProviderSettings.get("cline")?.auth).toBeUndefined()
-			// Exactly one user.auth_logged_out in total: the SDK resolver's
-			// token_invalid (on the SDK telemetry instance) and nothing from
-			// the adapter (on the app telemetry service).
-			const sdkLogoutEvents = vi
-				.mocked(mockSdkTelemetry.capture)
-				.mock.calls.filter(([input]) => input.event === "user.auth_logged_out")
-			expect(sdkLogoutEvents).toHaveLength(1)
-			expect(sdkLogoutEvents[0][0].properties).toMatchObject({ reason: LogoutReason.TOKEN_INVALID })
-			expect(mockCaptureAuthLoggedOut).not.toHaveBeenCalled()
-		})
-	})
-
-	describe("LogoutReason enum", () => {
-		it("has expected values", () => {
-			expect(LogoutReason.USER_INITIATED).toBe("user_initiated")
-			expect(LogoutReason.CROSS_WINDOW_SYNC).toBe("cross_window_sync")
-			expect(LogoutReason.ERROR_RECOVERY).toBe("error_recovery")
-			expect(LogoutReason.TOKEN_INVALID).toBe("token_invalid")
-			expect(LogoutReason.RESTORE_ERROR).toBe("restore_error")
-			expect(LogoutReason.UNKNOWN).toBe("unknown")
-		})
-	})
-
-	describe("workos: prefix handling", () => {
-		it("getAuthToken always returns workos:-prefixed token", async () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			const token = await authService.getAuthToken()
-			expect(token).toMatch(/^workos:/)
-			expect(token).toBe("workos:test-access-token")
-		})
-	})
-
-	describe("streaming subscriptions", () => {
-		it("subscribeToAuthStatusUpdate pushes initial state immediately", async () => {
-			const mockResponseStream = vi.fn()
-			const mockController = { postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() }
-
-			await authService.subscribeToAuthStatusUpdate(
-				// biome-ignore lint/suspicious/noExplicitAny: mock controller for testing
-				mockController as any,
-				{},
-				// biome-ignore lint/suspicious/noExplicitAny: mock response stream for testing
-				mockResponseStream as any,
-				"test-request-id",
-			)
-
-			// Should have pushed initial auth state
-			expect(mockResponseStream).toHaveBeenCalled()
-			const [authState] = mockResponseStream.mock.calls[0]
-			expect(authState).toBeDefined()
-			expect(authState.user).toBeUndefined() // Not authenticated in this test
-		})
-
-		it("polls feature flags with the authenticated user before posting state", async () => {
-			const authInfo = createTestAuthInfo()
-			testAccess(authService)._clineAuthInfo = authInfo
-			testAccess(authService)._authenticated = true
-
-			const mockResponseStream = vi.fn().mockResolvedValue(undefined)
-			const mockController = { postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() }
-
-			await authService.subscribeToAuthStatusUpdate(
-				// biome-ignore lint/suspicious/noExplicitAny: mock controller for testing
-				mockController as any,
-				{},
-				// biome-ignore lint/suspicious/noExplicitAny: mock response stream for testing
-				mockResponseStream as any,
-			)
-
-			expect(mockFeatureFlagsPoll).toHaveBeenCalledWith("user-123")
-			expect(mockIdentifyAccount).toHaveBeenCalledWith(authInfo.userInfo)
-			expect(mockIdentifyAccount.mock.invocationCallOrder[0]).toBeLessThan(mockFeatureFlagsPoll.mock.invocationCallOrder[0])
-			expect(mockController.postStateToWebview).toHaveBeenCalled()
-		})
-
-		it("polls feature flags with null when unauthenticated", async () => {
-			await authService.sendAuthStatusUpdate()
-
-			expect(mockFeatureFlagsPoll).toHaveBeenCalledWith(null)
-			expect(mockIdentifyAccount).not.toHaveBeenCalled()
-		})
-
-		it("removes subscription on cleanup", async () => {
-			const mockResponseStream = vi.fn().mockResolvedValue(undefined)
-			const mockController = { postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() }
-
-			await authService.subscribeToAuthStatusUpdate(
-				// biome-ignore lint/suspicious/noExplicitAny: mock controller for testing
-				mockController as any,
-				{},
-				// biome-ignore lint/suspicious/noExplicitAny: mock response stream for testing
-				mockResponseStream as any,
-			)
-
-			// Should have one handler
-			expect(testAccess(authService)._activeAuthStatusUpdateHandlers.size).toBe(1)
-
-			// Simulate cleanup
-			testAccess(authService)._activeAuthStatusUpdateHandlers.clear()
-			expect(testAccess(authService)._activeAuthStatusUpdateHandlers.size).toBe(0)
-		})
+	it("removes a failed subscriber while delivering to healthy subscribers", async () => {
+		const ctrl = { postStateToWebview: vi.fn(), invalidateProviderListings: vi.fn() }
+		const failed = vi.fn().mockRejectedValue(new Error("disconnected")),
+			healthy = vi.fn()
+		await service.subscribeToAuthStatusUpdate(ctrl as any, {}, failed)
+		await service.subscribeToAuthStatusUpdate(ctrl as any, {}, healthy)
+		await service.sendAuthStatusUpdate()
+		expect(failed).toHaveBeenCalledTimes(1)
+		expect(healthy).toHaveBeenCalledTimes(2)
+		noCloud()
 	})
 })
 
-// Ensure createTestOAuthCredentials is used (suppress unused warning)
-void createTestOAuthCredentials
+describe("permitted direct-provider authentication", () => {
+	it("saves OpenAI credentials without a Cline profile, flags or account", async () => {
+		await service.openAiCodexLogin()
+		expect(f.directLogin).toHaveBeenCalledTimes(1)
+		expect(f.settings.get("openai-codex").auth.accessToken).toBe(credentials.access)
+		expect(f.saveCodex).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "openai-codex", access_token: credentials.access }),
+		)
+		expect(f.settings.get("cline")).toEqual(legacy)
+		expect(service.getInfo().user).toBeUndefined()
+		noCloud()
+	})
+	it("surfaces direct sign-in failure without account fallback", async () => {
+		f.directLogin.mockRejectedValue(new Error("Direct credential rejected"))
+		await expect(service.openAiCodexLogin()).rejects.toThrow("Direct credential rejected")
+		expect(f.saveSettings).not.toHaveBeenCalled()
+		noCloud()
+	})
+	it("surfaces credential persistence failure without claiming successful sign-in", async () => {
+		f.saveSettings.mockImplementation(() => {
+			throw new Error("Local credential storage denied")
+		})
+		await expect(service.openAiCodexLogin()).rejects.toThrow("Local credential storage denied")
+		expect(f.saveCodex).not.toHaveBeenCalled()
+		noCloud()
+	})
+	it("clears only the requested direct provider", async () => {
+		f.settings.set("openai-codex", { provider: "openai-codex", auth: { accessToken: "synthetic" } })
+		await service.clearCodexCredentials()
+		expect(f.settings.get("openai-codex").auth).toBeUndefined()
+		expect(f.settings.get("cline")).toEqual(legacy)
+		noCloud()
+	})
+	it("routes OCA sign-in and callback to the separate provider service", async () => {
+		expect(await service.ocaLogin()).toEqual({ value: "direct-oca-url" })
+		await service.handleOcaAuthCallback("direct-code", "direct-state")
+		expect(f.ocaCallback).toHaveBeenCalledWith("direct-code", "direct-state")
+		expect(f.saveSettings).not.toHaveBeenCalled()
+		noCloud()
+	})
+	it("exchanges OpenRouter code only with the direct provider", async () => {
+		f.fetch.mockResolvedValue({ ok: true, json: async () => ({ key: "synthetic-direct-key" }) })
+		await service.handleOpenRouterCallback("direct-code")
+		expect(f.fetch).toHaveBeenCalledWith(
+			"https://openrouter.ai/api/v1/auth/keys",
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ code: "direct-code" }) }),
+		)
+		expect(f.setApi).toHaveBeenCalledWith(
+			expect.objectContaining({
+				other: "preserved",
+				planModeApiProvider: "openrouter",
+				actModeApiProvider: "openrouter",
+				openRouterApiKey: "synthetic-direct-key",
+			}),
+		)
+		noCloud()
+	})
+	for (const response of [
+		{ ok: false, status: 401 },
+		{ ok: true, json: async () => ({}) },
+	]) {
+		it("does not switch providers on invalid OpenRouter response, ok=" + response.ok, async () => {
+			f.fetch.mockResolvedValue(response)
+			await expect(service.handleOpenRouterCallback("invalid-code")).rejects.toThrow()
+			expect(f.setApi).not.toHaveBeenCalled()
+			noCloud()
+		})
+	}
+	for (const [method, provider, field] of [
+		["handleRequestyCallback", "requesty", "requestyApiKey"],
+		["handleHicapCallback", "hicap", "hicapApiKey"],
+	] as const) {
+		it("retains direct " + provider + " callback", async () => {
+			await service[method]("synthetic-direct-key")
+			expect(f.setApi).toHaveBeenCalledWith(
+				expect.objectContaining({
+					[field]: "synthetic-direct-key",
+					planModeApiProvider: provider,
+					actModeApiProvider: provider,
+				}),
+			)
+			expect(f.fetch).not.toHaveBeenCalled()
+			noCloud()
+		})
+	}
+})

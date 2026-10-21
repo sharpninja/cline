@@ -1,0 +1,15 @@
+{
+  "license": "Apache-2.0",
+  "scope": "This provenance manifest only",
+  "name": "@qbrainai/qbrain-ai-plugin-core",
+  "version": "0.2.0",
+  "archiveSha256": "BB9CBDE37B9E7F4EC1F4C7E52A3706BCDB8926FB3825F6BDE1CE32945D63BF1D",
+  "packageLicense": "MIT",
+  "projectLicenseFile": "McpServer-LICENSE.txt",
+  "sourceLicenses": "Mixed existing declarations and new Apache-2.0 sources; package declaration does not relabel bundled source",
+  "sourceRepository": "McpServer",
+  "sourceBaseline": "f56dcf70e7e84f2d286e1ca9e0e6680133f09a82",
+  "sourceReceipt": "docs/receipts/p1/signed-artifact-pin",
+  "acceptedDependencyPin": false,
+  "releaseProvenanceComplete": false
+}

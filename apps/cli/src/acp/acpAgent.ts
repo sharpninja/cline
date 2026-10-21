@@ -36,6 +36,10 @@ import { resolveSystemPrompt } from "../runtime/prompt";
 import { subscribeToAgentEvents } from "../runtime/session-events";
 import { createCliCore } from "../session/session";
 import { isClineOrgIndividualInferenceSubscriptionErrorMessage } from "../utils/cline-pass-errors";
+import {
+	assertDirectProvider,
+	requireDirectProvider,
+} from "../utils/cloud-policy";
 import { getCliBuildInfo } from "../utils/common";
 import { randomSessionId, resolveWorkspaceRoot } from "../utils/helpers";
 import type { Config } from "../utils/types";
@@ -149,8 +153,21 @@ export class AcpAgent implements Agent {
 	}
 
 	isSessionReady() {
+		const requested = process.env.CLINE_QB_PROVIDER?.trim();
+		if (requested) assertDirectProvider(requested);
+		if (
+			this.authResult &&
+			requested &&
+			this.authResult.providerId !== requested &&
+			!process.env.CLINE_QB_API_KEY
+		) {
+			throw RequestError.authRequired(
+				undefined,
+				"Configure a direct model provider with credentials for the selected provider",
+			);
+		}
 		// Require authentication unless an API key is provided via env var.
-		if (!this.authResult && !process.env.CLINE_API_KEY) {
+		if (!this.authResult && !process.env.CLINE_QB_API_KEY) {
 			// Check for valid persisted credentials from a previous session
 			// before forcing the client to re-authenticate.
 			this.authResult = this.tryRestoreAuth();
@@ -158,10 +175,11 @@ export class AcpAgent implements Agent {
 			if (!this.authResult) {
 				throw RequestError.authRequired(
 					undefined,
-					"Call authenticate before starting a session",
+					"Configure a direct model provider or call authenticate before starting a session",
 				);
 			}
 		}
+		requireDirectProvider(requested || this.authResult?.providerId);
 	}
 
 	availableModes() {
@@ -186,8 +204,9 @@ export class AcpAgent implements Agent {
 		const sessionId = randomSessionId();
 
 		const defaultMode = "act";
-		const providerId =
-			process.env.CLINE_PROVIDER ?? this.authResult?.providerId ?? "cline";
+		const providerId = requireDirectProvider(
+			process.env.CLINE_QB_PROVIDER?.trim() || this.authResult?.providerId,
+		);
 
 		const providerModels = await Llms.getModelsForProvider(
 			providerId,
@@ -198,7 +217,7 @@ export class AcpAgent implements Agent {
 		// nothing to `cline`, and vice versa.
 		const defaultModelId = await resolveDefaultModelId(
 			providerId,
-			process.env.CLINE_MODEL,
+			process.env.CLINE_QB_MODEL,
 			providerModels,
 		);
 
@@ -247,6 +266,7 @@ export class AcpAgent implements Agent {
 		this.isSessionReady();
 
 		let session = this.sessions.get(params.sessionId);
+		if (session) assertDirectProvider(session.currentProviderId);
 		let messages: MessageWithMetadata[];
 
 		if (session?.sessionManager && session.activeSessionId) {
@@ -261,8 +281,9 @@ export class AcpAgent implements Agent {
 				// loaded on a fresh connection starts from the same defaults
 				// as a new session, with the model resolved against the
 				// provider's own catalog just like newSession.
-				const providerId =
-					process.env.CLINE_PROVIDER ?? this.authResult?.providerId ?? "cline";
+				const providerId = requireDirectProvider(
+					process.env.CLINE_QB_PROVIDER?.trim() || this.authResult?.providerId,
+				);
 				const providerModels = await Llms.getModelsForProvider(
 					providerId,
 					CHAT_MODEL_QUERY_OPTIONS,
@@ -275,7 +296,7 @@ export class AcpAgent implements Agent {
 					currentProviderId: providerId,
 					currentModelId: await resolveDefaultModelId(
 						providerId,
-						process.env.CLINE_MODEL,
+						process.env.CLINE_QB_MODEL,
 						providerModels,
 					),
 					autoApproveTools: this.defaultAutoApproveTools,
@@ -461,10 +482,11 @@ export class AcpAgent implements Agent {
 
 		switch (params.configId) {
 			case "provider": {
-				if (process.env.CLINE_PROVIDER) {
+				assertDirectProvider(value);
+				if (process.env.CLINE_QB_PROVIDER) {
 					throw RequestError.invalidParams(
 						undefined,
-						"Cannot change provider: CLINE_PROVIDER environment variable is set",
+						"Cannot change provider: CLINE_QB_PROVIDER environment variable is set",
 					);
 				}
 				if (!isAcpAuthMethodId(value)) {
@@ -607,7 +629,7 @@ export class AcpAgent implements Agent {
 	}
 
 	private get accountApiKey(): string {
-		return process.env.CLINE_API_KEY ?? this.authResult?.apiKey ?? "";
+		return process.env.CLINE_QB_API_KEY ?? this.authResult?.apiKey ?? "";
 	}
 
 	private async getOrganizationConfigOption(
@@ -634,7 +656,9 @@ export class AcpAgent implements Agent {
 	 * the client doesn't have to re-authenticate every time.
 	 */
 	private tryRestoreAuth(): AcpAuthResult | undefined {
+		const requested = process.env.CLINE_QB_PROVIDER?.trim();
 		for (const method of ACP_AUTH_METHODS) {
+			if (requested && method.id !== requested) continue;
 			const settings = this.providerSettingsManager.getProviderSettings(
 				method.id,
 			);
@@ -691,6 +715,10 @@ export class AcpAgent implements Agent {
 		acpSessionId: string,
 		options?: { resume?: boolean },
 	): Promise<MessageWithMetadata[] | undefined> {
+		assertDirectProvider(session.currentProviderId);
+		requireDirectProvider(
+			process.env.CLINE_QB_PROVIDER?.trim() || session.currentProviderId,
+		);
 		if (session.sessionManager) {
 			return undefined;
 		}
@@ -762,8 +790,14 @@ export class AcpAgent implements Agent {
 		const cwd = session.cwd || process.cwd();
 		const workspaceRoot = resolveWorkspaceRoot(cwd);
 		// Resolve credentials: env vars take precedence, then session provider.
-		const providerId = process.env.CLINE_PROVIDER ?? session.currentProviderId;
-		const apiKey = process.env.CLINE_API_KEY ?? this.authResult?.apiKey ?? "";
+		const providerId = requireDirectProvider(
+			process.env.CLINE_QB_PROVIDER?.trim() || session.currentProviderId,
+		);
+		const apiKey =
+			process.env.CLINE_QB_API_KEY ||
+			(this.authResult?.providerId === providerId
+				? this.authResult.apiKey
+				: "");
 		const systemPrompt = await resolveSystemPrompt({
 			cwd,
 			providerId,

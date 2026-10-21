@@ -123,6 +123,11 @@ export function createAgentRuntimeConfig(
 			input.completionPolicy === null
 				? undefined
 				: (input.completionPolicy ?? agentConfig.completionPolicy),
+		completionGate: agentConfig.completionGate,
+		requiredTools: agentConfig.requiredTools,
+		modelRequestGate: agentConfig.modelRequestGate,
+		toolExecutionGate: agentConfig.toolExecutionGate,
+		toolResultGate: agentConfig.toolResultGate,
 		maxIterations: agentConfig.maxIterations,
 		toolExecution,
 		toolPolicies: agentConfig.toolPolicies,

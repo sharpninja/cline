@@ -196,6 +196,9 @@ export interface ClineCoreOptions {
 	 * - `"local"` — always uses local in-process execution and local SQLite/file storage.
 	 */
 	backendMode?: RuntimeHostMode;
+	/** Local-only host runtime configuration. Requires backendMode: "local";
+	 * callbacks are never serialized or silently dropped for hub/remote routing. */
+	configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 	/**
 	 * Hub runtime connection options. Used when `backendMode` is `"hub"` or when `"auto"`
 	 * should prefer a shared local hub if available.

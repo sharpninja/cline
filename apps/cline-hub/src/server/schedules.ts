@@ -3,8 +3,8 @@ import {
 	HubScheduleCommandService,
 	HubScheduleService,
 } from "@cline/core";
+import { requireDirectProvider } from "@cline/qbrain-governance/cloud-policy";
 import {
-	CLINE_DEFAULT_MODEL_ID,
 	ONE_TIME_SCHEDULE_CRON_PATTERN,
 	ONE_TIME_SCHEDULE_RUN_AT_METADATA_KEY,
 	readHubScheduleMode,
@@ -17,7 +17,7 @@ let scheduleCommands: HubScheduleCommandService | undefined;
 function getCommands(): HubScheduleCommandService {
 	if (!scheduleService || !scheduleCommands) {
 		scheduleService = new HubScheduleService({
-			runtimeHandlers: createLocalHubScheduleRuntimeHandlers(),
+			runtimeHandlers: createDirectScheduleRuntimeHandlers(),
 		});
 		scheduleCommands = new HubScheduleCommandService(scheduleService);
 	}
@@ -129,10 +129,7 @@ export async function handleRoutineScheduleCommand(
 			name,
 			...timing,
 			prompt,
-			modelSelection: {
-				providerId: asTrimmedString(args?.provider) ?? "cline",
-				modelId: asTrimmedString(args?.model) ?? CLINE_DEFAULT_MODEL_ID,
-			},
+			modelSelection: directScheduleSelection(args),
 			mode: readHubScheduleMode(args, "yolo"),
 			workspaceRoot: routineWorkspaceRoot,
 			cwd: asTrimmedString(args?.cwd),
@@ -164,10 +161,7 @@ export async function handleRoutineScheduleCommand(
 			name,
 			...timing,
 			prompt,
-			modelSelection: {
-				providerId: asTrimmedString(args?.provider) ?? "cline",
-				modelId: asTrimmedString(args?.model) ?? CLINE_DEFAULT_MODEL_ID,
-			},
+			modelSelection: directScheduleSelection(args),
 			...(mode === undefined ? {} : { mode }),
 			workspaceRoot: routineWorkspaceRoot,
 			cwd: asTrimmedString(args?.cwd) ?? null,
@@ -194,6 +188,8 @@ export async function handleRoutineScheduleCommand(
 		return { schedule: reply.schedule ?? null };
 	}
 	if (command === "resume_routine_schedule") {
+		const existing = await commandHub("schedule.get", { scheduleId });
+		assertStoredSchedule(existing.schedule);
 		const reply = await commandHub("schedule.enable", { scheduleId });
 		return { schedule: reply.schedule ?? null };
 	}
@@ -201,6 +197,7 @@ export async function handleRoutineScheduleCommand(
 		const existing = await commandHub("schedule.get", { scheduleId });
 		if (!existing.schedule)
 			throw new Error(`schedule not found: ${scheduleId}`);
+		assertStoredSchedule(existing.schedule);
 		const reply = await commandHub("schedule.trigger", {
 			scheduleId,
 			wait: false,
@@ -212,4 +209,66 @@ export async function handleRoutineScheduleCommand(
 		return { deleted: reply.deleted === true };
 	}
 	throw new Error(`unsupported routine schedule command: ${command}`);
+}
+
+function directScheduleSelection(args?: Record<string, unknown>) {
+	const providerId = requireDirectProvider(asTrimmedString(args?.provider));
+	const modelId = asTrimmedString(args?.model);
+	if (!modelId)
+		throw new Error(
+			"Configure an explicit direct provider model for this schedule.",
+		);
+	return { providerId, modelId };
+}
+function assertStoredSchedule(value: unknown): void {
+	if (!value || typeof value !== "object")
+		throw new Error("Schedule not found.");
+	const selection = (
+		value as { modelSelection?: { providerId?: string; modelId?: string } }
+	).modelSelection;
+	requireDirectProvider(selection?.providerId);
+	if (!selection?.modelId?.trim())
+		throw new Error(
+			"Configure an explicit direct provider model for this schedule.",
+		);
+}
+
+export function createDirectScheduleRuntimeHandlers(): ReturnType<
+	typeof createLocalHubScheduleRuntimeHandlers
+> {
+	let runtime:
+		| ReturnType<typeof createLocalHubScheduleRuntimeHandlers>
+		| undefined;
+	const admitted = new Set<string>();
+	return {
+		async startSession(request, options) {
+			requireDirectProvider(request.provider);
+			if (!request.model?.trim())
+				throw new Error(
+					"Configure an explicit direct provider model for this schedule.",
+				);
+			runtime ??= createLocalHubScheduleRuntimeHandlers();
+			const result = await runtime.startSession(request, options);
+			admitted.add(result.sessionId);
+			return result;
+		},
+		async sendSession(id, request) {
+			if (!runtime || !admitted.has(id))
+				throw new Error(
+					"Scheduled session has no direct-provider admission. Start a new governed schedule run.",
+				);
+			return runtime.sendSession(id, request);
+		},
+		async abortSession(id) {
+			return runtime && admitted.has(id)
+				? runtime.abortSession(id)
+				: { applied: false };
+		},
+		async stopSession(id) {
+			if (!runtime || !admitted.has(id)) return { applied: false };
+			const result = await runtime.stopSession(id);
+			admitted.delete(id);
+			return result;
+		},
+	};
 }
