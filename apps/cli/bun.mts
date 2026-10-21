@@ -9,10 +9,9 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { $ } from "bun";
-
-function defineProcessEnv(name: string): string {
-	return JSON.stringify(process.env[name] ?? "");
-}
+import qbrainBuildDefines from "../qbrain-build-defines.json" with {
+	type: "json",
+};
 
 const sourcemap = Bun.env.CLINE_SOURCEMAPS === "1" ? "linked" : "none";
 const rootDir = dirname(fileURLToPath(import.meta.url));
@@ -85,47 +84,9 @@ const result = await Bun.build({
 	],
 	define: {
 		"process.env.NODE_ENV": '"production"',
-		...(process.env.TELEMETRY_SERVICE_API_KEY
-			? {
-					"process.env.TELEMETRY_SERVICE_API_KEY": defineProcessEnv(
-						"TELEMETRY_SERVICE_API_KEY",
-					),
-				}
-			: {}),
-		...(process.env.ERROR_SERVICE_API_KEY
-			? {
-					"process.env.ERROR_SERVICE_API_KEY": defineProcessEnv(
-						"ERROR_SERVICE_API_KEY",
-					),
-				}
-			: {}),
-		"process.env.OTEL_TELEMETRY_ENABLED": defineProcessEnv(
-			"OTEL_TELEMETRY_ENABLED",
-		),
-		"process.env.OTEL_EXPORTER_OTLP_ENDPOINT": defineProcessEnv(
-			"OTEL_EXPORTER_OTLP_ENDPOINT",
-		),
-		"process.env.OTEL_METRICS_EXPORTER": defineProcessEnv(
-			"OTEL_METRICS_EXPORTER",
-		),
-		"process.env.OTEL_LOGS_EXPORTER": defineProcessEnv("OTEL_LOGS_EXPORTER"),
-		"process.env.OTEL_TRACES_EXPORTER": defineProcessEnv(
-			"OTEL_TRACES_EXPORTER",
-		),
-		"process.env.CLINE_TRACE_RECORD_CONTENT": defineProcessEnv(
-			"CLINE_TRACE_RECORD_CONTENT",
-		),
-		"process.env.OTEL_EXPORTER_OTLP_PROTOCOL": defineProcessEnv(
-			"OTEL_EXPORTER_OTLP_PROTOCOL",
-		),
-		"process.env.OTEL_METRIC_EXPORT_INTERVAL": defineProcessEnv(
-			"OTEL_METRIC_EXPORT_INTERVAL",
-		),
-		"process.env.OTEL_EXPORTER_OTLP_HEADERS": defineProcessEnv(
-			"OTEL_EXPORTER_OTLP_HEADERS",
-		),
+		...qbrainBuildDefines,
 	},
-	env: "OTEL_*",
+	env: "disable",
 	banner:
 		'import { createRequire as __clineCreateRequire } from "node:module"; const require = __clineCreateRequire(import.meta.url);',
 });

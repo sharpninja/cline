@@ -1,15 +1,17 @@
 import { name, publisher, version } from "../package.json"
 import { HostProvider } from "./hosts/host-provider"
 
-const prefix = name === "claude-dev" ? "cline" : name
+const prefix = name
 
 /**
  * List of commands with the name of the extension they are registered under.
  * These should match the command IDs defined in package.json.
  * For Nightly build, the publish script has updated all the commands to use the extension name as prefix.
- * In production, all commands are registered under "cline" for consistency.
+ * Runtime and manifest commands share the installed extension name.
  */
 const ClineCommands = {
+	CreateTestTasks: prefix + ".dev.createTestTasks",
+	ExpireMcpOAuthTokens: prefix + ".dev.expireMcpOAuthTokens",
 	PlusButton: prefix + ".plusButtonClicked",
 	McpButton: prefix + ".mcpButtonClicked",
 	MarketplaceButton: prefix + ".marketplaceButtonClicked",
@@ -51,6 +53,8 @@ export const ExtensionRegistryInfo = {
 	publisher,
 	commands: ClineCommands,
 	views: ClineViewIds,
+	contextKeys: { isDevMode: name + ".isDevMode", isGeneratingCommit: name + ".isGeneratingCommit" },
+	icon: name + "-icon",
 }
 
 export interface HostInfo {

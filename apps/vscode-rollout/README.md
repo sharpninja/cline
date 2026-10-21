@@ -122,8 +122,10 @@ project-key inputs; it does not declare a SendGrid credential. Identify the
 exact matching string in production staging output before changing or
 broadening the exemption.
 
-Local builds have no `TELEMETRY_SERVICE_API_KEY`, so the loader skips PostHog
-entirely and everyone stays on legacy unless `CLINE_BUNDLE_OVERRIDE` is set.
+cline-qb builds use the fixed empty telemetry definitions in
+`apps/qbrain-build-defines.json`, even when keys are supplied to the build.
+The inherited rollout behavior below is not authorization to enable PostHog;
+runtime rollout/storage isolation remains separately required by QB-AGENT-001.
 
 CI: the `ext-vscode-ab-package` workflow (manual dispatch) builds both refs,
 stitches, smoke-tests, uploads the `.vsix` artifact, and optionally publishes.

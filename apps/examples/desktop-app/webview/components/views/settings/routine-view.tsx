@@ -1,10 +1,10 @@
 "use client";
 
 import {
-	CLINE_DEFAULT_MODEL_ID,
 	ONE_TIME_SCHEDULE_CRON_PATTERN,
 	ONE_TIME_SCHEDULE_RUN_AT_METADATA_KEY,
 } from "@cline/shared/browser";
+import { isClineCloudProvider } from "@cline/qbrain-governance/cloud-policy";
 import { Switch } from "@cline/ui";
 import {
 	CheckCircle2,
@@ -169,14 +169,6 @@ interface ProcessContext {
 	cwd: string;
 }
 
-const FALLBACK_PROVIDER_MODELS: Record<string, string[]> = {
-	cline: [CLINE_DEFAULT_MODEL_ID],
-	anthropic: ["claude-sonnet-4-6"],
-	"openai-native": ["gpt-5.3-codex"],
-	openrouter: ["anthropic/claude-sonnet-4.6"],
-	gemini: ["gemini-2.5-pro"],
-};
-
 const WEEKDAY_OPTIONS = [
 	{ label: "Mon", value: "MON" },
 	{ label: "Tue", value: "TUE" },
@@ -227,10 +219,7 @@ function formatDateTime(value?: DateTimeValue | null): string {
 }
 
 function formatScheduleModel(schedule: RoutineSchedule): string {
-	const provider =
-		schedule.modelSelection?.providerId?.trim() || schedule.provider?.trim();
-	const model =
-		schedule.modelSelection?.modelId?.trim() || schedule.model?.trim();
+	const { provider, model } = getScheduleProviderModel(schedule);
 	if (provider && model) {
 		return `${provider}/${model}`;
 	}
@@ -241,15 +230,18 @@ function getScheduleProviderModel(schedule: RoutineSchedule): {
 	provider: string;
 	model: string;
 } {
+	// A partial migrated pair must not borrow the other member from legacy fields.
+	const selection =
+		schedule.modelSelection === undefined
+			? { providerId: schedule.provider, modelId: schedule.model }
+			: schedule.modelSelection;
 	return {
 		provider:
-			schedule.modelSelection?.providerId?.trim() ||
-			schedule.provider?.trim() ||
-			"cline",
+			typeof selection?.providerId === "string"
+				? selection.providerId.trim()
+				: "",
 		model:
-			schedule.modelSelection?.modelId?.trim() ||
-			schedule.model?.trim() ||
-			CLINE_DEFAULT_MODEL_ID,
+			typeof selection?.modelId === "string" ? selection.modelId.trim() : "",
 	};
 }
 
@@ -573,10 +565,9 @@ export function RoutineSchedulesContent({
 	const [createFormError, setCreateFormError] = useState<string | null>(null);
 	const [providerModels, setProviderModels] = useState<
 		Record<string, string[]>
-	>(FALLBACK_PROVIDER_MODELS);
-	const [enabledProviderIds, setEnabledProviderIds] = useState<string[]>(() =>
-		Object.keys(FALLBACK_PROVIDER_MODELS),
-	);
+	>({});
+	const [enabledProviderIds, setEnabledProviderIds] = useState<string[]>([]);
+	const [catalogError, setCatalogError] = useState<string | null>(null);
 	const [lastModelSelection] = useState(() =>
 		readModelSelectionStorageFromWindow(),
 	);
@@ -591,8 +582,8 @@ export function RoutineSchedulesContent({
 		scheduleMinute: "0",
 		scheduleDays: ["MON", "TUE", "WED", "THU", "FRI"],
 		prompt: "Review PRs opened yesterday and summarize issues.",
-		provider: "cline",
-		model: CLINE_DEFAULT_MODEL_ID,
+		provider: "",
+		model: "",
 		workspaceRoot: "",
 		systemPrompt: "",
 		timeoutSeconds: "",
@@ -602,12 +593,10 @@ export function RoutineSchedulesContent({
 	const minimumOnce = minimumOneTimeDateTime();
 
 	const visibleProviderModels = useMemo(() => {
-		if (enabledProviderIds.length === 0) {
-			return providerModels;
-		}
 		const next: Record<string, string[]> = {};
 		for (const providerId of enabledProviderIds) {
-			next[providerId] = providerModels[providerId] ?? [];
+			if (providerId && !isClineCloudProvider(providerId))
+				next[providerId] = providerModels[providerId] ?? [];
 		}
 		return next;
 	}, [enabledProviderIds, providerModels]);
@@ -631,24 +620,24 @@ export function RoutineSchedulesContent({
 				if (cancelled) {
 					return;
 				}
-				setProviderModels(payload.providerModels);
-				setEnabledProviderIds((current) => {
-					const nextProviderIds = new Set(payload.enabledProviderIds);
-					const normalizedCurrentProvider = normalizeProviderId(
-						createForm.provider,
+				setProviderModels(
+					Object.fromEntries(
+						Object.entries(payload.providerModels).filter(
+							([id]) => id && !isClineCloudProvider(id),
+						),
+					),
+				);
+				setEnabledProviderIds(
+					payload.enabledProviderIds.filter(
+						(id) => id && !isClineCloudProvider(id),
+					),
+				);
+				setCatalogError(null);
+			} catch (error) {
+				if (!cancelled)
+					setCatalogError(
+						`Provider catalog unavailable: ${error instanceof Error ? error.message : String(error)}. Configure a direct provider in Settings and reopen Schedule.`,
 					);
-					if (normalizedCurrentProvider) {
-						nextProviderIds.add(normalizedCurrentProvider);
-					}
-					for (const providerId of current) {
-						if (providerId in payload.providerModels) {
-							nextProviderIds.add(providerId);
-						}
-					}
-					return Array.from(nextProviderIds);
-				});
-			} catch {
-				// Keep fallback values if provider catalog is unavailable.
 			}
 		}
 
@@ -656,11 +645,11 @@ export function RoutineSchedulesContent({
 		return () => {
 			cancelled = true;
 		};
-	}, [createForm.provider]);
+	}, []);
 
 	useEffect(() => {
 		const normalizedProvider = normalizeProviderId(createForm.provider);
-		if (!normalizedProvider) {
+		if (!normalizedProvider || isClineCloudProvider(normalizedProvider)) {
 			return;
 		}
 		if ((providerModels[normalizedProvider] ?? []).length > 0) {
@@ -694,58 +683,6 @@ export function RoutineSchedulesContent({
 			cancelled = true;
 		};
 	}, [createForm.provider, providerModels]);
-
-	useEffect(() => {
-		if (availableProviders.length === 0) {
-			return;
-		}
-		let nextSelection: { provider: string; model: string } | null = null;
-		const normalizedFormProvider = normalizeProviderId(createForm.provider);
-		if (!availableProviders.includes(normalizedFormProvider)) {
-			const nextProvider =
-				rememberedProvider && availableProviders.includes(rememberedProvider)
-					? rememberedProvider
-					: availableProviders[0];
-			const models = visibleProviderModels[nextProvider] ?? [];
-			const rememberedModel =
-				lastModelSelection.lastModelByProvider[nextProvider] ??
-				lastModelSelection.lastModelByProvider[lastModelSelection.lastProvider];
-			const nextModel =
-				rememberedModel && models.includes(rememberedModel)
-					? rememberedModel
-					: (models[0] ?? "");
-			nextSelection = { provider: nextProvider, model: nextModel };
-		} else {
-			const models = visibleProviderModels[normalizedFormProvider] ?? [];
-			if (models.length === 0 || models.includes(createForm.model)) {
-				return;
-			}
-			const rememberedModel =
-				lastModelSelection.lastModelByProvider[normalizedFormProvider] ??
-				lastModelSelection.lastModelByProvider[lastModelSelection.lastProvider];
-			const nextModel =
-				rememberedModel && models.includes(rememberedModel)
-					? rememberedModel
-					: models[0];
-			nextSelection = { provider: normalizedFormProvider, model: nextModel };
-		}
-
-		const timeoutId = window.setTimeout(() => {
-			setCreateForm((prev) => ({
-				...prev,
-				...nextSelection,
-			}));
-		}, 0);
-		return () => window.clearTimeout(timeoutId);
-	}, [
-		availableProviders,
-		createForm.model,
-		createForm.provider,
-		lastModelSelection.lastModelByProvider,
-		lastModelSelection.lastProvider,
-		rememberedProvider,
-		visibleProviderModels,
-	]);
 
 	const refreshSchedules = useCallback(
 		async (options?: { force?: boolean; showLoading?: boolean }) => {
@@ -941,15 +878,14 @@ export function RoutineSchedulesContent({
 		const preferredProvider =
 			rememberedProvider && availableProviders.includes(rememberedProvider)
 				? rememberedProvider
-				: (availableProviders[0] ?? "cline");
+				: "";
 		const modelsForProvider = visibleProviderModels[preferredProvider] ?? [];
 		const rememberedModel =
-			lastModelSelection.lastModelByProvider[preferredProvider] ??
-			lastModelSelection.lastModelByProvider[lastModelSelection.lastProvider];
+			lastModelSelection.lastModelByProvider[preferredProvider];
 		const preferredModel =
 			rememberedModel && modelsForProvider.includes(rememberedModel)
 				? rememberedModel
-				: (modelsForProvider[0] ?? createForm.model);
+				: "";
 		setCreateForm({
 			name: template?.name ?? "",
 			scheduleType: template?.scheduleType ?? "once",
@@ -977,16 +913,25 @@ export function RoutineSchedulesContent({
 	};
 
 	const openEditDialog = (schedule: RoutineSchedule) => {
-		const { provider, model } = getScheduleProviderModel(schedule);
+		const existing = getScheduleProviderModel(schedule);
+		const excluded = isClineCloudProvider(existing.provider);
+		const provider = excluded ? "" : normalizeProviderId(existing.provider);
+		const model = provider ? existing.model : "";
 		const parsedTrigger = parseScheduleTrigger(schedule);
 		setEditingSchedule(schedule);
 		setErrorMessage(null);
-		setCreateFormError(null);
+		setCreateFormError(
+			excluded
+				? "Cline hosted providers are unavailable. Choose a direct provider and model; configure credentials in Settings."
+				: null,
+		);
 		setEnabledProviderIds((current) =>
-			current.includes(provider) ? current : [...current, provider],
+			!provider || current.includes(provider)
+				? current
+				: [...current, provider],
 		);
 		setProviderModels((current) =>
-			current[provider]?.includes(model)
+			!provider || !model || current[provider]?.includes(model)
 				? current
 				: {
 						...current,
@@ -1061,17 +1006,23 @@ export function RoutineSchedulesContent({
 			setCreateFormError("Workspace is required.");
 			return;
 		}
+		const provider = normalizeProviderId(
+			asTrimmedFormString(createForm.provider),
+		);
+		const model = asTrimmedFormString(createForm.model);
+		if (!provider || isClineCloudProvider(provider)) {
+			setCreateFormError(
+				"Choose a direct provider. Configure credentials in Settings if none are available.",
+			);
+			return;
+		}
+		if (!model) {
+			setCreateFormError("Choose a model for the selected provider.");
+			return;
+		}
 		setCreateFormError(null);
 		setIsCreating(true);
 		try {
-			const provider =
-				normalizeProviderId(asTrimmedFormString(createForm.provider)) ||
-				availableProviders[0] ||
-				"cline";
-			const model =
-				asTrimmedFormString(createForm.model) ||
-				(visibleProviderModels[provider] ?? [])[0] ||
-				CLINE_DEFAULT_MODEL_ID;
 			const systemPrompt = asTrimmedFormString(createForm.systemPrompt);
 			const timeoutSeconds = parseOptionalPositiveInt(
 				createForm.timeoutSeconds,
@@ -1195,7 +1146,7 @@ export function RoutineSchedulesContent({
 			<PageHeader
 				description="Run agents on cron schedules for recurring automations like daily summaries and code reviews."
 				title="Schedule"
-				meta={<CommandBadge>cline schedule</CommandBadge>}
+				meta={<CommandBadge>cline-qb schedule</CommandBadge>}
 				actions={
 					<>
 						<Button
@@ -1216,6 +1167,7 @@ export function RoutineSchedulesContent({
 				}
 			/>
 
+			{catalogError && <p role="alert">{catalogError}</p>}
 			{errorMessage && (
 				<div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
 					{errorMessage}
@@ -1882,7 +1834,7 @@ export function RoutineSchedulesContent({
 										rememberedModel &&
 										providerModelsForNext.includes(rememberedModel)
 											? rememberedModel
-											: (providerModelsForNext[0] ?? "");
+											: "";
 									setCreateForm((prev) => ({
 										...prev,
 										provider: value,

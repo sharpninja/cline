@@ -163,7 +163,12 @@ describe("starting SSH sessions", () => {
 				],
 			]),
 		} as unknown as SidecarContext;
-		const config = { sessionId, environmentId };
+		const config = {
+			sessionId,
+			environmentId,
+			provider: "openai",
+			model: "test",
+		};
 		return {
 			ctx: getEnvironmentContext(ctx, environmentId),
 			config,
@@ -235,12 +240,12 @@ describe("starting SSH sessions", () => {
 describe("buildSessionConnectionUpdate", () => {
 	it("does not clear reasoning settings when config omits reasoning fields", () => {
 		const update = buildSessionConnectionUpdate({
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 		});
 
 		expect(update).toEqual({
-			providerId: "cline",
+			providerId: "anthropic",
 			modelId: "anthropic/claude-sonnet-4.6",
 		});
 		expect(Object.hasOwn(update, "thinking")).toBe(false);
@@ -251,12 +256,12 @@ describe("buildSessionConnectionUpdate", () => {
 	it("clears reasoning settings when thinking is explicitly disabled", () => {
 		expect(
 			buildSessionConnectionUpdate({
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 				thinking: false,
 			}),
 		).toEqual({
-			providerId: "cline",
+			providerId: "anthropic",
 			modelId: "anthropic/claude-sonnet-4.6",
 			thinking: false,
 			reasoningEffort: null,
@@ -266,13 +271,13 @@ describe("buildSessionConnectionUpdate", () => {
 
 	it("updates explicit reasoning settings without clearing omitted settings", () => {
 		const update = buildSessionConnectionUpdate({
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 			reasoningEffort: "high",
 		});
 
 		expect(update).toEqual({
-			providerId: "cline",
+			providerId: "anthropic",
 			modelId: "anthropic/claude-sonnet-4.6",
 			thinking: true,
 			reasoningEffort: "high",
@@ -284,7 +289,7 @@ describe("buildSessionConnectionUpdate", () => {
 describe("shouldUpdateSessionConnection", () => {
 	it("skips the redundant connection update on the first send", () => {
 		const config = {
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 			thinking: true,
 			reasoningEffort: "high",
@@ -295,7 +300,7 @@ describe("shouldUpdateSessionConnection", () => {
 
 	it("updates the connection when the selected reasoning level changes", () => {
 		const current = {
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 			thinking: true,
 			reasoningEffort: "low",
@@ -314,21 +319,21 @@ describe("hasProviderChanged", () => {
 	it("distinguishes provider switches from model switches", () => {
 		expect(
 			hasProviderChanged(
-				{ provider: "cline", model: "anthropic/claude-sonnet-4.6" },
+				{ provider: "anthropic", model: "anthropic/claude-sonnet-4.6" },
 				{ provider: "openai-codex", model: "gpt-5.3-codex" },
 			),
 		).toBe(true);
 		expect(
 			hasProviderChanged(
-				{ provider: "cline", model: "anthropic/claude-sonnet-4.6" },
-				{ provider: "cline", model: "openai/gpt-5.3-codex" },
+				{ provider: "anthropic", model: "anthropic/claude-sonnet-4.6" },
+				{ provider: "anthropic", model: "openai/gpt-5.3-codex" },
 			),
 		).toBe(false);
 	});
 
 	it("honors a providerId-only update when the stored config uses provider", () => {
 		const current = {
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 		};
 		const update = {
@@ -400,7 +405,7 @@ describe("pathless session starts", () => {
 		const result = (await handleChatSessionCommand(ctx, {
 			action: "start",
 			config: {
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 				enableTools: true,
 				// Legacy desktop capability flags must not override the SDK's
@@ -433,7 +438,7 @@ describe("environment-bound session attach", () => {
 		const localGet = vi.fn(async () => ({
 			sessionId,
 			status: "completed",
-			provider: "cline",
+			provider: "anthropic",
 			model: "anthropic/claude-sonnet-4.6",
 			cwd: "/local/project",
 			workspaceRoot: "/local/project",
@@ -508,7 +513,7 @@ describe("session forks", () => {
 					sourceSessionId,
 					{
 						config: {
-							provider: "cline",
+							provider: "anthropic",
 							model: "anthropic/claude-sonnet-4.6",
 						},
 						messages: sourceMessages,
@@ -526,7 +531,7 @@ describe("session forks", () => {
 						sessionId: sourceSessionId,
 						source: "desktop",
 						status: "completed",
-						provider: "cline",
+						provider: "anthropic",
 						model: "anthropic/claude-sonnet-4.6",
 						cwd: "/workspace/project",
 						workspaceRoot: "/workspace/project",
@@ -555,7 +560,7 @@ describe("session forks", () => {
 			sessionId: sourceSessionId,
 			forkBeforeRunCount: 2,
 			config: {
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 			},
 		})) as { sessionId: string; messages: unknown[] };
@@ -623,7 +628,7 @@ describe("session forks", () => {
 					sourceSessionId,
 					{
 						config: {
-							provider: "cline",
+							provider: "anthropic",
 							model: "anthropic/claude-sonnet-4.6",
 							cwd: "/workspace/project",
 						},
@@ -637,7 +642,11 @@ describe("session forks", () => {
 				[
 					siblingSessionId,
 					{
-						config: { workspaceRoot: "/workspace/project/." },
+						config: {
+							provider: "anthropic",
+							model: "test",
+							workspaceRoot: "/workspace/project/.",
+						},
 						messages: [],
 						promptsInQueue: [],
 						busy: false,
@@ -653,7 +662,7 @@ describe("session forks", () => {
 						sessionId: sourceSessionId,
 						source: "desktop",
 						status: "completed",
-						provider: "cline",
+						provider: "anthropic",
 						model: "anthropic/claude-sonnet-4.6",
 						cwd: "/workspace/project",
 						workspaceRoot: "/workspace/project",
@@ -724,7 +733,7 @@ describe("session forks", () => {
 					sourceSessionId,
 					{
 						config: {
-							provider: "cline",
+							provider: "anthropic",
 							model: "anthropic/claude-sonnet-4.6",
 						},
 						messages: sourceMessages,
@@ -741,7 +750,7 @@ describe("session forks", () => {
 					sessionId: sourceSessionId,
 					source: "desktop",
 					status: "completed",
-					provider: "cline",
+					provider: "anthropic",
 					model: "anthropic/claude-sonnet-4.6",
 					cwd: "/workspace/project",
 					workspaceRoot: "/workspace/project",
@@ -762,7 +771,7 @@ describe("session forks", () => {
 			sessionId: sourceSessionId,
 			forkBeforeRunCount: 2,
 			config: {
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 			},
 		})) as { sessionId: string };
@@ -802,7 +811,7 @@ describe("session forks", () => {
 					sourceSessionId,
 					{
 						config: {
-							provider: "cline",
+							provider: "anthropic",
 							model: "anthropic/claude-sonnet-4.6",
 						},
 						messages: sourceMessages,
@@ -820,7 +829,7 @@ describe("session forks", () => {
 						sessionId: sourceSessionId,
 						source: "desktop",
 						status: "completed",
-						provider: "cline",
+						provider: "anthropic",
 						model: "anthropic/claude-sonnet-4.6",
 						cwd: "/workspace/project",
 						workspaceRoot: "/workspace/project",
@@ -850,7 +859,7 @@ describe("session forks", () => {
 			action: "fork",
 			sessionId: sourceSessionId,
 			config: {
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 			},
 		});
@@ -871,7 +880,7 @@ describe("session forks", () => {
 				[
 					sourceSessionId,
 					{
-						config: {},
+						config: { provider: "anthropic", model: "test" },
 						messages: [{ role: "user", content: "prompt" }],
 						promptsInQueue: [],
 						busy: true,
@@ -902,7 +911,7 @@ describe("session forks", () => {
 				[
 					sourceSessionId,
 					{
-						config: {},
+						config: { provider: "anthropic", model: "test" },
 						messages: [{ role: "user", content: "prompt" }],
 						promptsInQueue: [],
 						busy: false,
@@ -944,7 +953,11 @@ describe("session forks", () => {
 				[
 					sourceSessionId,
 					{
-						config: { cwd: "/workspace/project" },
+						config: {
+							provider: "anthropic",
+							model: "test",
+							cwd: "/workspace/project",
+						},
 						messages: [{ role: "user", content: "prompt" }],
 						promptsInQueue: [],
 						busy: false,
@@ -955,7 +968,11 @@ describe("session forks", () => {
 				[
 					siblingSessionId,
 					{
-						config: { workspaceRoot: "/workspace/project/." },
+						config: {
+							provider: "anthropic",
+							model: "test",
+							workspaceRoot: "/workspace/project/.",
+						},
 						messages: [],
 						promptsInQueue: [],
 						busy: true,
@@ -1006,7 +1023,11 @@ describe("session forks", () => {
 					[
 						sessionId,
 						{
-							config: { cwd: "/workspace/project" },
+							config: {
+								provider: "anthropic",
+								model: "test",
+								cwd: "/workspace/project",
+							},
 							messages: [{ role: "user", content: "first prompt" }],
 							promptsInQueue: [],
 							// A drained queued turn is running: no send() RPC owns
@@ -1028,7 +1049,7 @@ describe("session forks", () => {
 				checkpointRunCount: 1,
 				config: {
 					cwd: "/workspace/project",
-					provider: "cline",
+					provider: "anthropic",
 					model: "test-model",
 				},
 			};
@@ -1073,7 +1094,11 @@ describe("session forks", () => {
 				[
 					sessionId,
 					{
-						config: { workspaceRoot: "/workspace/project/." },
+						config: {
+							provider: "anthropic",
+							model: "test",
+							workspaceRoot: "/workspace/project/.",
+						},
 						messages: [{ role: "user", content: "prompt" }],
 						promptsInQueue: [],
 						busy: false,
@@ -1101,7 +1126,7 @@ describe("session forks", () => {
 
 describe("first-send connection updates", () => {
 	const baseConfig = {
-		provider: "cline",
+		provider: "anthropic",
 		model: "anthropic/claude-sonnet-4.6",
 		thinking: true,
 		reasoningEffort: "high",
@@ -1415,7 +1440,7 @@ describe("first-send connection updates", () => {
 			session.queuedAttachmentFiles = queuedMap;
 			(localSessionManager(ctx) as { get?: unknown }).get = vi.fn(async () => ({
 				status: "idle",
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 				cwd: "/workspace",
 				workspaceRoot: "/workspace",
@@ -1595,12 +1620,12 @@ describe("first-send connection updates", () => {
 
 	it("restores the previous provider runtime when replacement startup fails", async () => {
 		const { ctx, send, sessionId, start, stop } = createContext();
-		const previousKanbanDataDir = process.env.CLINE_KANBAN_DATA_DIR;
-		const testKanbanDataDir = join(
+		const previousDataDir = process.env.CLINE_DATA_DIR;
+		const testDataDir = join(
 			tmpdir(),
 			`cline-provider-rollback-${process.pid}`,
 		);
-		process.env.CLINE_KANBAN_DATA_DIR = testKanbanDataDir;
+		process.env.CLINE_DATA_DIR = testDataDir;
 		start
 			.mockRejectedValueOnce(new Error("Codex bootstrap failed"))
 			.mockResolvedValueOnce({ sessionId });
@@ -1622,7 +1647,7 @@ describe("first-send connection updates", () => {
 			expect(start.mock.calls[1]?.[0]).toEqual(
 				expect.objectContaining({
 					config: expect.objectContaining({
-						providerId: "cline",
+						providerId: "anthropic",
 						modelId: "anthropic/claude-sonnet-4.6",
 						sessionId,
 					}),
@@ -1637,29 +1662,29 @@ describe("first-send connection updates", () => {
 			await handleChatSessionCommand(ctx, {
 				action: "send",
 				sessionId,
-				prompt: "continue with Cline",
+				prompt: "continue with Anthropic",
 				config: { ...baseConfig },
 			});
 			expect(send).toHaveBeenCalledOnce();
 		} finally {
-			if (previousKanbanDataDir === undefined) {
-				delete process.env.CLINE_KANBAN_DATA_DIR;
+			if (previousDataDir === undefined) {
+				delete process.env.CLINE_DATA_DIR;
 			} else {
-				process.env.CLINE_KANBAN_DATA_DIR = previousKanbanDataDir;
+				process.env.CLINE_DATA_DIR = previousDataDir;
 			}
-			rmSync(testKanbanDataDir, { recursive: true, force: true });
+			rmSync(testDataDir, { recursive: true, force: true });
 		}
 	});
 
 	it("restores the previous provider when replacement label sync fails", async () => {
 		const { ctx, send, sessionId, start, stop, updateSessionConnection } =
 			createContext();
-		const previousKanbanDataDir = process.env.CLINE_KANBAN_DATA_DIR;
-		const testKanbanDataDir = join(
+		const previousDataDir = process.env.CLINE_DATA_DIR;
+		const testDataDir = join(
 			tmpdir(),
 			`cline-provider-label-rollback-${process.pid}`,
 		);
-		process.env.CLINE_KANBAN_DATA_DIR = testKanbanDataDir;
+		process.env.CLINE_DATA_DIR = testDataDir;
 		try {
 			updateSessionConnection
 				.mockRejectedValueOnce(new Error("manifest write failed"))
@@ -1681,14 +1706,14 @@ describe("first-send connection updates", () => {
 			expect(start.mock.calls[1]?.[0]).toEqual(
 				expect.objectContaining({
 					config: expect.objectContaining({
-						providerId: "cline",
+						providerId: "anthropic",
 						modelId: "anthropic/claude-sonnet-4.6",
 						sessionId,
 					}),
 				}),
 			);
 			expect(updateSessionConnection).toHaveBeenNthCalledWith(2, sessionId, {
-				providerId: "cline",
+				providerId: "anthropic",
 				modelId: "anthropic/claude-sonnet-4.6",
 				thinking: true,
 				reasoningEffort: "high",
@@ -1704,18 +1729,18 @@ describe("first-send connection updates", () => {
 			await handleChatSessionCommand(ctx, {
 				action: "send",
 				sessionId,
-				prompt: "continue with Cline",
+				prompt: "continue with Anthropic",
 				config: { ...baseConfig },
 			});
 			expect(send).toHaveBeenCalledOnce();
 			expect(start).toHaveBeenCalledTimes(2);
 		} finally {
-			if (previousKanbanDataDir === undefined) {
-				delete process.env.CLINE_KANBAN_DATA_DIR;
+			if (previousDataDir === undefined) {
+				delete process.env.CLINE_DATA_DIR;
 			} else {
-				process.env.CLINE_KANBAN_DATA_DIR = previousKanbanDataDir;
+				process.env.CLINE_DATA_DIR = previousDataDir;
 			}
-			rmSync(testKanbanDataDir, { recursive: true, force: true });
+			rmSync(testDataDir, { recursive: true, force: true });
 		}
 	});
 
@@ -2273,7 +2298,7 @@ Follow the desktop send workflow instructions.`,
 			messages: [],
 		}));
 		const session = {
-			config: { provider: "cline", model: "test-model", cwd: workspace },
+			config: { provider: "anthropic", model: "test-model", cwd: workspace },
 			messages: [],
 			promptsInQueue: [],
 			busy: false,
@@ -2489,7 +2514,7 @@ describe("/compact", () => {
 					sessionId,
 					{
 						config: options.config ?? {
-							provider: "cline",
+							provider: "anthropic",
 							model: "test-model",
 						},
 						messages: [],
@@ -3101,7 +3126,7 @@ describe("mistake-limit prompt", () => {
 		await handleChatSessionCommand(ctx, {
 			action: "start",
 			config: {
-				provider: "cline",
+				provider: "anthropic",
 				model: "anthropic/claude-sonnet-4.6",
 				cwd: "/tmp/ws",
 			},
@@ -3121,7 +3146,10 @@ describe("queue steering routing", () => {
 		const ctx = {
 			liveSessions: new Map(),
 			wsClients: new Set(),
-			...localRuntimeContext({ pendingPrompts: { steerFirst, update } }),
+			...localRuntimeContext({
+				get: vi.fn(async () => ({ provider: "anthropic", model: "test" })),
+				pendingPrompts: { steerFirst, update },
+			}),
 		} as unknown as SidecarContext;
 		await handleChatSessionCommand(ctx, {
 			action: "steer_prompt",

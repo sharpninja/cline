@@ -174,6 +174,84 @@ teardown branch a stop routes through. Each session emits at most one
 `task.completed`. See `DOC.md` for the event payload and `source`
 field.
 
+### Host hub namespaces
+
+The core hub entrypoint exports `registerHubDaemonRuntime` for trusted executable bootstrap before importing the auto-running daemon entry. It captures one process-wide session host and peer identity, refuses replacement, and checks that identity against the host registration before constructing scheduled runtimes or the listener. Both ordinary sessions and schedule/cron operations receive that same host. Server shutdown owns its disposal. A failed bind disposes the supplied runtime, so daemon startup reports the occupied port rather than retrying a disposed host; pre-construction lock contention retains the bounded retry. Generic SDK callers without an identity or runtime registration retain existing defaults. This injection boundary does not itself bootstrap the pinned product plugin or implement A8/S6 lifecycle integration; shipped hosts must supply those policies.
+
+The Node shared entrypoint exposes immutable `registerHubNamespace` and `registerHubDaemonLaunchSpec` registrations. Generic core consults these optional host inputs for endpoint variables, ports, discovery paths, and absolute detached-child invocation; it does not import product policy. Unregistered SDK consumers retain existing defaults.
+
+Private CLI and dashboard bootstraps register the approved namespace before hub discovery or provider storage construction. Registered hosts fix the WebSocket path, validate private port controls, ignore upstream discovery/build hints, and disable automatic occupied-port fallback. Discovery and lock paths pass through the registered storage validator. CLI `--config` propagates the resolved private root to children; launch arguments are defensively copied and immutable. Standalone Bun dashboard startup selects the checkout CLI by absolute path; hosts without a registered launch command fail detached startup with a diagnostic.
+
+This is namespace and launch isolation only. Authenticated hub identity and policy-digest checks before attachment or retirement, plus mandatory governed runtime factories, remain separate P1 work.
+### Host storage namespaces
+
+The Node storage entrypoint exports `registerStorageNamespace` and `validateStoragePath`. A host registers its namespace before importing or constructing storage services. The process-wide registration is immutable and shared across separately bundled entrypoints; generic SDK consumers that do not register a namespace retain existing Cline defaults. Default storage roots, global contribution discovery, derived user directories, and explicit cron/task paths consult the host policy. Existing workspace `.cline`, `.clinerules`, and vendor-neutral `.agents` conventions remain supported.
+
+The private `@cline/qbrain-governance/storage-policy` module supplies cline-qb defaults and only the approved `CLINE_QB_*` path overrides. It captures the operator home, accepts additional OS-resolved Documents directories from hosts, excludes upstream Cline roots, and resolves existing or dangling symlink ancestors without creating directories. Derived user paths are validated separately because a permitted root can contain an unsafe child symlink. Generic core does not import this product policy.
+
+The CLI entrypoint imports the private `host-storage` initializer before storage-bearing imports, including when launched as a daemon or connector. The initializer resolves Windows known Documents or Linux XDG Documents locations, rejects unsafe private overrides, and shares the immutable namespace across repeat initialization. CLI `--config` and `--data-dir` use that policy; sandbox configuration writes only private path variables. Hook audit output derives from the selected data root. Dashboard configuration remains active until shutdown and is restored on both success and failure.
+
+Other shipped entrypoints still require early registration. Explicit service paths and child-process configuration need continued integration, while daemon endpoint identity/policy checks, hardcoded paths outside shared resolvers, and platform-wide lifecycle/native acceptance remain open. Windows known-folder discovery has an injectable query boundary; native Windows acceptance is still required. Resolver checks do not claim an atomic filesystem sandbox against adversarial renames between validation and I/O.
+### Trusted runtime construction
+
+Local hosts capture an optional `configureAgentRuntime` callback independently of
+optional contribution discovery. `LocalRuntimeHost` forwards the same factory to
+the lead `SessionRuntime` and the delegated-agent configuration provider. Each
+session captures it and applies it to every newly built runtime configuration,
+after ordinary tools, hooks and prompts are resolved. The host can then compose
+mandatory registrations and final model/tool/result/completion gates using that
+agent's identity and a separately captured, immutable workspace context. Local
+host startup passes the actual working directory and project root. Delegated
+configuration carries the same root session binding; connection updates cannot
+replace it. The host's spawn fallback and nested spawns retain the captured factory
+even without a live delegated configuration provider. Direct SessionRuntime callers
+must supply workspace fields explicitly; no process-wide directory fallback is
+introduced. Core remains generic and does not import the private product package.
+
+Host setup failures release run admission even when no stateless runtime was
+created. An abort during finite async setup is retained until runtime startup,
+before model dispatch. Remote routing refuses an in-process callback rather than
+dropping it across serialization; policy must be installed by the actual execution
+host. Product entrypoint composition and authenticated hub identity remain open.
+
+### Local tool outcome acknowledgment
+
+The stateless runtime exposes an optional trusted `toolResultGate` independently
+of optional plugin hooks. It captures dispatch identity/arguments, then awaits
+host acknowledgment of the original execution outcome before optional rewriting
+or final completion. Refused/unknown calls are distinguished from actual tool
+execution; cancellation does not discard settled outcomes. Malformed, failed or
+blocked acknowledgment prevents further dispatch. Already running parallel calls
+are still observed. The host owns persistence and crash recovery; the runtime
+does not own an outbox or infer a durable receipt from a tool's return value.
+Core preserves the callback, and generic SDK consumers can omit it. Product
+factories still need to bind it to the shared lifecycle implementation.
+
+### Adapter tool execution boundary
+
+The generic `host-only` request policy requires an explicit adapter enforcement
+declaration before model dispatch. Gateway adapters preserve authorized tool
+definitions over handle defaults and propagate the policy to a declared provider.
+The AI SDK adapter factory declares transport execution behavior independently of
+provider IDs. Native HTTP adapters can accept host-only requests with provider
+tools disabled; internal-agent and unproven transports refuse them before loading
+the vendor implementation. Required tools cannot silently disappear on an image
+or non-tool route. The private required-context gate requests this contract; the
+generic packages do not import product policy. This boundary complements local
+execution/audit/completion gates and does not itself wire shipped entrypoints.
+
+### cline-qb host provider policy
+
+The pure `@cline/qbrain-governance/cloud-policy` entrypoint owns the cline-qb cloud-provider classification and actionable rejection. CLI and hub product adapters use that same policy; generic SDK provider and account APIs remain available to library consumers. Hub catalogs filter cloud providers before metadata/credential resolution, and account/OAuth/settings entrypoints reject prohibited calls before the underlying services run.
+
+Desktop onboarding offers explicit direct-provider configuration. Cline account sign-in, account keys, recommendations, subscription upsells and the account-backed GitHub onboarding step are removed from its import graph. A legacy GitHub step opens direct setup; inherited account state and feature flags cannot restore the removed flow. The key-only form filters cloud aliases and providers requiring another authentication mode or mandatory endpoint configuration. Those supported direct/local providers remain configurable in Settings. Saving a selected provider retains that provider/model; a failed save or skipped setup never selects a fallback. Onboarding regression tests run with the desktop settings suite. This UI boundary does not replace runtime trust or signed plugin lifecycle integration.
+
+Desktop onboarding and schedule gap criteria are AC-QB-061 through AC-QB-066, owned by P1 under FR-QB-006/TR-QB-NETWORK-001. The corresponding named TEST records are linked to executable statement names. A structured schedule modelSelection pair is authoritative as a unit; missing or malformed fields cannot borrow legacy members. Display and editing use the same resolver. Desktop schedules start with no synthetic provider/model catalog. New schedules reuse a remembered permitted pair only when available, otherwise the operator selects both fields. Catalog errors are visible and never activate a fallback provider. Editing preserves the existing direct pair even if discovery changes; an excluded hosted pair requires explicit replacement. Submit rejects missing or hosted providers and missing models before IPC. The actual form regression suite covers create/edit, unavailable catalog, legacy cloud state, missing model, disabled catalogs and remembered direct selection; live scheduled execution remains subject to runtime governance and phase validation.
+
+AC-QB-067 covers desktop composition and explicit recovery. The page no longer reads hosted feature flags, manufactures a hosted default, or offers account-backed GitHub recovery. Blocked hosted selection changes neither preferences nor configuration. Existing hosted history requires a new direct session; it is never converted in place. A successful Local/SSH environment switch identifies its destination to the old pane, preventing a second draft in the old environment. Direct composer recovery keeps the selected provider/model and only that provider's auth metadata; missing or excluded selections remain incomplete. Policy-effect and real environment-selector tests cover these boundaries; they do not certify installed desktop networking or signed startup.
+
+The dashboard resolves explicit provider/model pairs without borrowing a model from another provider, reads only `CLINE_QB_PROVIDER`/`CLINE_QB_MODEL` for these defaults, and validates the stored provider before sending, forking, or restoring a session. Its schedule adapter rejects cloud or absent providers/models before constructing the local runtime and permits sends only to sessions admitted by that adapter. A restarted adapter requires a new schedule run instead of accepting an unrelated persisted session ID. These product boundaries do not establish complete daemon identity, isolated storage, mandatory lifecycle integration, or all-host traffic acceptance; those remain P1 integration work.
+
 ### Hub-Backed Runtime
 
 1. Host constructs a `RuntimeHost` through `@cline/core`.
@@ -1061,3 +1139,119 @@ session’s tool approval policies or approval callback, matching generic subage
 and teammates. The parent’s `subagent_<name>` delegation call still follows the
 parent’s approval policy. Tool allowlists and disabled-tool filtering remain in
 effect when constructing child tools. Inherited runtime hooks are unchanged.
+
+### Authenticated product hub boundary
+
+The shared package holds optional immutable host identity registration; Core
+implements authenticated status checks without importing the private product.
+The cline-qb endpoint namespace requires initialization. Expected identity and
+server declaration are separate: a server must receive an explicit identity and
+an owned session host before it may attest that identity. Socket construction,
+discovery reuse, cached server reuse and daemon control cross the same boundary.
+Retirement distinguishes failed identity from an absent listener, and governed
+retirement never uses a discovery PID as signal authority. Policy digest provenance
+and governed session-host installation remain responsibilities of product bootstrap.
+
+### Private governed plugin loading
+
+The V2 artifact has a dedicated SDK-independent host entrypoint. It receives the
+running host's tool factory directly, preserving SDK identity in unpackaged and
+compiled hosts without relying on ambient node_modules. The private governance
+package loads that entry only after complete installed-tree verification and checks
+the tree again before constructing a host. Legacy optional-plugin exports remain
+separate. Signed-marker/pin authorization precedes this loader; actual A8/S6 lifecycle
+composition and distribution/native acceptance are separate required gates.
+
+### Governed hub control and repair
+
+The shipped CLI routes `hub stop`, `hub upgrade` and governed `doctor fix`
+through authenticated hub retirement. Upgrade requires an accepted drain and
+positive idle evidence, then waits for retirement before ensuring a replacement.
+An observation or trust failure never authorizes PID signaling. Governed doctor
+repair does not run process-name/port cleanup or stop unrelated connector records.
+Retirement captures discovery generation before shutdown and clears only that
+same generation under the discovery mutation lock; a concurrent successor's
+record survives. Generic SDK consumers retain their unregistered behavior.
+
+
+### Governed hub build identity and workspace verification policy
+
+The private governance build embeds a deterministic SHA256 identity over the SDK
+runtime/dependency graph, private governance runtime/build inputs, and vendored
+canonical plugin-core archive. Trusted bootstrap combines that identity with the
+exact canonically verified V2 artifact binding and exposes an immutable
+`peerIdentity` for the hub handshake. Missing build preparation refuses bootstrap;
+runtime environment values cannot override the embedded identity. Bootstrap still
+authenticates each workspace and reauthenticates every host construction.
+
+Hub `policyDigest` identifies the common enforcement build plus reviewed plugin
+artifact. It is distinct from both the signed plugin contract digest and a
+workspace's signed verification-policy digest. Separate workspaces can share the
+same hub enforcement identity while their policies, credentials, source fingerprints
+and completion evidence remain workspace-bound. Policy rotation invalidates that
+workspace's verification evidence; it does not change the common build identity.
+This follows the approved shared-hub and policy/build identity requirements.
+
+This bootstrap surface alone does not register a live daemon or establish A8/S6
+lifecycle readiness. Shipped hosts must supply the mandatory governed session
+factory before advertising or registering the identity. Successful product startup,
+accepted plugin pins and the cumulative phase gate remain required.
+
+
+### Governed discovery refusal and cold startup
+
+Governed discovery consumes the same authenticated status response that passed
+the hub identity check. It validates status shape and the advertised endpoint,
+retains the caller's discovery credential, and never follows a status redirect.
+Identity/authentication refusals, malformed status, timeouts and DNS failures
+preserve discovery and block replacement. Only transport ECONNREFUSED establishes
+absence; its public error carries no original URL, token, body or cause.
+
+Without discovery credentials, a preflight may establish an unused listener by
+connection refusal. Any response or uncertain transport blocks spawning. After a
+host-owned launch, clients wait for authenticated discovery publication, allowing
+the listener-before-record startup window without attaching on health alone.
+Recovery removes only the observed discovery generation and refuses if a successor
+has replaced it. Governed startup does not retire legacy shared-hub records or use
+fallback ports. Generic unregistered SDK recovery behavior remains unchanged.
+
+### Current input at run-start hooks
+
+`beforeRun` receives `context.input` separately from the pre-run conversation
+snapshot. Core passes the actual current prompt with `appendInput: false` because
+its persisted history already includes this turn. Hosts using this option must
+seed that input themselves; it does not alter hook ordering. Empty strings retain
+the existing no-append behavior, while hooks still distinguish them from undefined.
+The lifecycle input preserves the exact string (including whitespace and an explicit
+empty string), or the supplied message/message-array shape and IDs. An inputless
+`continue()` supplies `undefined`; it never substitutes an earlier user message.
+`afterRun` continues to receive only the snapshot and result.
+
+The runtime captures input synchronously before asynchronous plugin setup and
+makes a separate detached data copy for each run-start hook. Caller mutations
+during setup and hook mutations cannot rewrite the admitted input or another
+hook's observation. Messages support plain data, cycles, Dates, URLs, Uint8Arrays
+and ArrayBuffers, using the model-request data copier. Executable values, symbols
+and unsupported class instances in input are rejected before initialization or
+model dispatch rather than retained by reference. This tightens the accepted
+message-data contract; callers must project opaque application objects to data.
+
+Hooks still run before input insertion and retain their existing stop/context
+behavior. A refusing hook can observe the current input without publishing it to
+the conversation or sending it to a model. This ingress surface does not itself
+mint MCP identities, persist audit records, or establish A8 lifecycle readiness.
+
+### Verification runner summaries
+
+Completion verification recognizes executed-test summaries from Vitest/Jest,
+.NET, Bun, Node TAP and Rust libtest. Bun workspace prefixes (including nested
+and sequential forms) are removed before parsing. Interleaved TAP streams stay
+separate by workspace/script, and every TAP footer must be complete. Malformed,
+duplicate or contradictory counters invalidate the evidence; aggregate totals
+must use nonnegative safe integers and reconcile exactly.
+
+Cancelled TAP cases count as failures; todo, pending, ignored, measured and
+filtered-out cases remain visible as unexecuted/skipped obligations. File/suite
+counts, individual test progress and a zero exit status are insufficient evidence.
+Required test checks still reject zero totals, failures or skips. These rules do
+not waive existing phase blockers or replace signed verification-map registration.

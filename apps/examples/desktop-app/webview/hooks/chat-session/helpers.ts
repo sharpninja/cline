@@ -1,4 +1,8 @@
 import {
+	CLINE_ACCOUNT_DISABLED_MESSAGE,
+	isClineCloudProvider,
+} from "@cline/qbrain-governance/cloud-policy";
+import {
 	createSessionId,
 	type GeneratedMedia,
 	isGeneratedMedia,
@@ -276,18 +280,17 @@ export function resolveCredentialFailureHint(
 	providerId: string,
 	auth?: ProviderAuthInfo,
 ): string {
+	if (isClineCloudProvider(providerId)) return CLINE_ACCOUNT_DISABLED_MESSAGE;
 	const providerAuth = matchingProviderAuth(providerId, auth);
 	const cli = providerAuth?.localCli;
 	if (cli) {
 		return `Sign in again with the \`${cli.command}\` CLI in a terminal, then try again.`;
 	}
-	if (normalizeProviderId(providerId) === "cline") {
-		return "Sign in to Cline again in Settings → Account, then try again.";
-	}
+
 	if (!providerAuth) {
 		return "Sign in again using your provider's authentication method, then try again.";
 	}
-	return "Check your model connection in Settings → Providers (or sign in with Cline), then try again.";
+	return "Check your model connection in Settings → Providers, then try again.";
 }
 
 /**
@@ -305,16 +308,14 @@ export function isCredentialFailure(description: string): boolean {
 /**
  * The in-app action that fixes a credential failure for `providerId`, or null
  * when there is none to offer (local-auth providers are fixed in their CLI).
- * Cline goes to the Account page: Settings → Providers keeps reporting a
- * stale OAuth token as "signed in", while the Account page verifies it against
- * the API and offers to sign in again.
+ * Excluded hosted providers point to direct-provider configuration.
  */
 export function resolveCredentialFailureAction(
 	providerId: string,
 	auth?: ProviderAuthInfo,
 ): { label: string; target: "account" | "models" } | null {
-	if (normalizeProviderId(providerId) === "cline") {
-		return { label: "Sign in to Cline", target: "account" };
+	if (isClineCloudProvider(providerId)) {
+		return { label: "Open API providers", target: "models" };
 	}
 	const providerAuth = matchingProviderAuth(providerId, auth);
 	if (!providerAuth || providerAuth.localCli) {

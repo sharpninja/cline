@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveDocumentsExtensionPath, validateStoragePath } from "@cline/shared/storage"
 import fs from "fs/promises"
 import path from "path"
 import { Logger } from "@/shared/services/Logger"
@@ -879,6 +880,7 @@ export class HookFactory {
 	 * Global hooks are located in paths containing "Cline/Hooks" or "cline/hooks".
 	 */
 	private static isGlobalHooksDir(dir: string): boolean {
+		if (getStorageNamespace()) return validateStoragePath(dir) === validateStoragePath(resolveDocumentsExtensionPath("Hooks"))
 		return /[/\\][Cc]line[/\\][Hh]ooks/i.test(dir)
 	}
 
@@ -967,6 +969,7 @@ export class HookFactory {
 	 * @throws Error if an unexpected file system error occurs
 	 */
 	static async findHookInHooksDir(hookName: HookName, hooksDir: string): Promise<string | undefined> {
+		validateStoragePath(hooksDir)
 		return process.platform === "win32"
 			? HookFactory.findWindowsHook(hookName, hooksDir)
 			: HookFactory.findUnixHook(hookName, hooksDir)
@@ -990,6 +993,7 @@ export class HookFactory {
 		const powerShellExists = await HookFactory.isHookFile(powerShell, hookName)
 
 		if (powerShellExists) {
+			validateStoragePath(powerShell)
 			return powerShell
 		}
 
@@ -998,7 +1002,8 @@ export class HookFactory {
 
 	private static async isHookFile(candidate: string, hookName: HookName): Promise<boolean> {
 		try {
-			const stat = await fs.stat(candidate)
+			const stat = await fs.stat(validateStoragePath(candidate))
+			validateStoragePath(candidate)
 			return stat.isFile()
 		} catch (error) {
 			HookFactory.handleHookDiscoveryError(error, hookName, candidate)
@@ -1023,7 +1028,11 @@ export class HookFactory {
 		const candidate = path.join(hooksDir, hookName)
 
 		try {
-			const [stat, _] = await Promise.all([fs.stat(candidate), fs.access(candidate, fs.constants.X_OK)])
+			const [stat, _] = await Promise.all([
+				fs.stat(validateStoragePath(candidate)),
+				fs.access(validateStoragePath(candidate), fs.constants.X_OK),
+			])
+			validateStoragePath(candidate)
 			return stat.isFile() ? candidate : undefined
 		} catch (error) {
 			HookFactory.handleHookDiscoveryError(error, hookName, candidate)

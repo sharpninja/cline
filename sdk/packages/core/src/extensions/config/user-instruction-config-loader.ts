@@ -17,6 +17,7 @@ import {
 	resolveSkillsConfigSearchPaths as resolveSkillsConfigSearchPathsFromShared,
 	resolveWorkflowsConfigSearchPaths as resolveWorkflowsConfigSearchPathsFromShared,
 	SKILLS_CONFIG_DIRECTORY_NAME,
+	validateStoragePath,
 	WORKFLOWS_CONFIG_DIRECTORY_NAME,
 } from "@cline/shared/storage";
 import YAML from "yaml";
@@ -195,16 +196,16 @@ async function discoverAgentPluginSkillFile(
 ): Promise<ReadonlyArray<UnifiedConfigFileCandidate>> {
 	try {
 		const [pluginRoot, skillRoot, filePath] = await Promise.all([
-			realpath(skill.pluginRoot),
-			realpath(skill.directoryPath),
-			realpath(skill.filePath),
+			realpath(validateStoragePath(skill.pluginRoot)),
+			realpath(validateStoragePath(skill.directoryPath)),
+			realpath(validateStoragePath(skill.filePath)),
 		]);
 		if (
 			pluginRoot !== resolve(skill.pluginRoot) ||
 			!isPathWithin(pluginRoot, skillRoot) ||
 			!isPathWithin(pluginRoot, filePath) ||
-			!(await stat(skillRoot)).isDirectory() ||
-			!(await stat(filePath)).isFile()
+			!(await stat(validateStoragePath(skillRoot))).isDirectory() ||
+			!(await stat(validateStoragePath(filePath))).isFile()
 		) {
 			return [];
 		}
@@ -227,7 +228,9 @@ async function discoverManagedPluginRoots(
 	clineDirectoryPath: string,
 ): Promise<string[]> {
 	try {
-		const entries = await readdir(clineDirectoryPath, { withFileTypes: true });
+		const entries = await readdir(validateStoragePath(clineDirectoryPath), {
+			withFileTypes: true,
+		});
 		const pluginRoots: string[] = [];
 		for (const entry of entries) {
 			if (!entry.isDirectory()) {
@@ -236,7 +239,10 @@ async function discoverManagedPluginRoots(
 			const pluginRoot = join(clineDirectoryPath, entry.name);
 			const manifestPath = join(pluginRoot, MANAGED_PLUGIN_MANIFEST_FILE_NAME);
 			try {
-				const content = await readFile(manifestPath, "utf8");
+				const content = await readFile(
+					validateStoragePath(manifestPath),
+					"utf8",
+				);
 				const parsed = JSON.parse(content) as unknown;
 				if (parsed && typeof parsed === "object") {
 					pluginRoots.push(pluginRoot);
@@ -466,7 +472,9 @@ async function discoverSkillFiles(
 	}
 
 	try {
-		const entries = await readdir(directoryPath, { withFileTypes: true });
+		const entries = await readdir(validateStoragePath(directoryPath), {
+			withFileTypes: true,
+		});
 		const candidates: UnifiedConfigFileCandidate[] = [];
 		for (const entry of entries) {
 			if (entry.isFile() && entry.name === SKILL_FILE_NAME) {
@@ -481,7 +489,7 @@ async function discoverSkillFiles(
 			const isDirectory =
 				entry.isDirectory() ||
 				(entry.isSymbolicLink() &&
-					(await stat(entryPath)
+					(await stat(validateStoragePath(entryPath))
 						.then((entryStat) => entryStat.isDirectory())
 						.catch((error) => {
 							if (isIgnorableDirectoryError(error)) {
@@ -520,7 +528,7 @@ async function discoverRulesLikeFiles(
 	}
 
 	try {
-		const entryStat = await stat(directoryPath);
+		const entryStat = await stat(validateStoragePath(directoryPath));
 		if (entryStat.isFile()) {
 			return [
 				{
@@ -537,7 +545,9 @@ async function discoverRulesLikeFiles(
 	}
 
 	try {
-		const entries = await readdir(directoryPath, { withFileTypes: true });
+		const entries = await readdir(validateStoragePath(directoryPath), {
+			withFileTypes: true,
+		});
 		const candidates = entries
 			.filter((entry) => entry.isFile() && isMarkdownFile(entry.name))
 			.map((entry) => ({
@@ -549,7 +559,7 @@ async function discoverRulesLikeFiles(
 		// Special case: if this is a workspace root directory, also check for AGENTS.md
 		const agentsPath = join(directoryPath, "AGENTS.md");
 		try {
-			const agentsStat = await stat(agentsPath);
+			const agentsStat = await stat(validateStoragePath(agentsPath));
 			if (agentsStat.isFile()) {
 				// Check if AGENTS.md is not already in the candidates
 				const alreadyIncluded = candidates.some(

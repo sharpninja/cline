@@ -46,6 +46,7 @@ export * from "./client/session-client";
 export * from "./client/ui-client";
 export * from "./daemon";
 export * from "./daemon/runtime-handlers";
+export * from "./daemon/runtime-registration";
 export * from "./daemon/start-shared-server";
 export * from "./discovery";
 export * from "./discovery/defaults";

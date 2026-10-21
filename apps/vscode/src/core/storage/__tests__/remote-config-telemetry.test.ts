@@ -67,7 +67,7 @@ describe("remote config telemetry ownership", () => {
 		expect(transformRemoteConfigToStateShape({ version: "v1" }).openTelemetryTracesExporter).toBeUndefined()
 	})
 
-	it("awaits removal before retaining a trace-only replacement and its owner", async () => {
+	it("awaits old provider removal without installing a remote replacement", async () => {
 		let release!: () => void
 		removeProvider.mockImplementation(
 			() =>
@@ -80,10 +80,8 @@ describe("remote config telemetry ownership", () => {
 		expect(constructClient).not.toHaveBeenCalled()
 		release()
 		await applying
-		expect(addProvider).toHaveBeenCalledTimes(1)
-		expect(client.dispose).not.toHaveBeenCalled()
-		await (addProvider.mock.calls[0][0] as OpenTelemetryTelemetryProvider).dispose()
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(constructClient).not.toHaveBeenCalled()
+		expect(addProvider).not.toHaveBeenCalled()
 	})
 
 	it("awaits provider removal when clearing remote config", async () => {
@@ -105,18 +103,20 @@ describe("remote config telemetry ownership", () => {
 		expect(finished).toBe(true)
 	})
 
-	it("disposes a client when wrapper initialization fails", async () => {
+	it("does not construct a remote client even when legacy wrapper initialization would fail", async () => {
 		sinon.stub(OpenTelemetryTelemetryProvider.prototype, "initialize").rejects(new Error("init failed"))
 		await applyRemoteConfig(config, {}, mcpHub as never)
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(constructClient).not.toHaveBeenCalled()
 		expect(addProvider).not.toHaveBeenCalled()
+		expect(client.dispose).not.toHaveBeenCalled()
 	})
 
-	it("disposes a client with no available signals", async () => {
+	it("does not construct a remote client: disposes a client with no available signals", async () => {
 		client.tracerProvider = null
 		await applyRemoteConfig(config, {}, mcpHub as never)
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(constructClient).not.toHaveBeenCalled()
 		expect(addProvider).not.toHaveBeenCalled()
+		expect(client.dispose).not.toHaveBeenCalled()
 	})
 })
 
@@ -131,25 +131,29 @@ describe("TelemetryProviderFactory ownership", () => {
 		])
 	})
 
-	it("retains trace-only clients until the wrapper is disposed", async () => {
+	it("enforces exclusion despite legacy settings: retains trace-only clients until the wrapper is disposed", async () => {
 		const [provider] = await TelemetryProviderFactory.createProviders()
-		expect(provider).toBeInstanceOf(OpenTelemetryTelemetryProvider)
-		expect(client.dispose).not.toHaveBeenCalled()
+		expect(provider).toBeInstanceOf(NoOpTelemetryProvider)
+		expect(constructClient).not.toHaveBeenCalled()
 		await provider.dispose()
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(client.dispose).not.toHaveBeenCalled()
 	})
 
-	it("disposes clients when initialization fails", async () => {
+	it("enforces exclusion despite legacy settings: disposes clients when initialization fails", async () => {
 		sinon.stub(OpenTelemetryTelemetryProvider.prototype, "initialize").rejects(new Error("init failed"))
 		const [provider] = await TelemetryProviderFactory.createProviders()
 		expect(provider).toBeInstanceOf(NoOpTelemetryProvider)
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(constructClient).not.toHaveBeenCalled()
+		await provider.dispose()
+		expect(client.dispose).not.toHaveBeenCalled()
 	})
 
-	it("disposes clients with no available signals", async () => {
+	it("enforces exclusion despite legacy settings: disposes clients with no available signals", async () => {
 		client.tracerProvider = null
 		const [provider] = await TelemetryProviderFactory.createProviders()
 		expect(provider).toBeInstanceOf(NoOpTelemetryProvider)
-		expect(client.dispose).toHaveBeenCalledTimes(1)
+		expect(constructClient).not.toHaveBeenCalled()
+		await provider.dispose()
+		expect(client.dispose).not.toHaveBeenCalled()
 	})
 })

@@ -1,4 +1,9 @@
-export const MODEL_SELECTION_STORAGE_KEY = "cline.code.model-selection.v1";
+import {
+	assertDirectProvider,
+	isClineCloudProvider,
+	rejectClineAccount,
+} from "@cline/qbrain-governance/cloud-policy";
+export const MODEL_SELECTION_STORAGE_KEY = "cline-qb.code.model-selection.v1";
 
 export type ModelSelectionStorage = {
 	lastProvider: string;
@@ -13,6 +18,7 @@ function sanitizeStringRecord(value: unknown): Record<string, string> {
 		Object.entries(value).filter(
 			([key, entry]) =>
 				typeof key === "string" &&
+				!isClineCloudProvider(key) &&
 				typeof entry === "string" &&
 				entry.trim().length > 0,
 		),
@@ -44,7 +50,8 @@ export function parseModelSelectionStorage(
 		if ("lastProvider" in shaped || "lastModelByProvider" in shaped) {
 			return {
 				lastProvider:
-					typeof shaped.lastProvider === "string"
+					typeof shaped.lastProvider === "string" &&
+					!isClineCloudProvider(shaped.lastProvider)
 						? shaped.lastProvider.trim()
 						: "",
 				lastModelByProvider: sanitizeStringRecord(shaped.lastModelByProvider),
@@ -63,21 +70,22 @@ export function parseModelSelectionStorage(
 export function readModelSelectionStorageFromWindow(
 	scope: ExecutionTarget = "local",
 ): ModelSelectionStorage {
-	if (typeof window === "undefined") {
-		return {
-			lastProvider: "",
-			lastModelByProvider: {},
-		};
+	if (scope !== "cloud" && typeof window !== "undefined") {
+		try {
+			return parseModelSelectionStorage(
+				window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY),
+			);
+		} catch {}
 	}
-	return parseModelSelectionStorage(
-		window.localStorage.getItem(modelSelectionStorageKey(scope)),
-	);
+	return { lastProvider: "", lastModelByProvider: {} };
 }
 
 export function writeModelSelectionStorageToWindow(
 	value: ModelSelectionStorage,
 	scope: ExecutionTarget = "local",
 ): void {
+	if (scope === "cloud") rejectClineAccount();
+	assertDirectProvider(value.lastProvider);
 	if (typeof window === "undefined") {
 		return;
 	}
@@ -88,7 +96,7 @@ export function writeModelSelectionStorageToWindow(
 }
 
 export const REASONING_SELECTION_STORAGE_KEY =
-	"cline.code.reasoning-selection.v1";
+	"cline-qb.code.reasoning-selection.v1";
 
 export const REASONING_SELECTION_VALUES = [
 	"none",
@@ -146,29 +154,21 @@ export function writeReasoningSelectionToWindow(
 }
 
 export type ExecutionTarget = "local" | "cloud";
-export const EXECUTION_TARGET_STORAGE_KEY = "cline.code.execution-target.v1";
+export const EXECUTION_TARGET_STORAGE_KEY = "cline-qb.code.execution-target.v1";
 
 function modelSelectionStorageKey(scope: ExecutionTarget): string {
 	// Cloud has a different model catalog; keep the local provider/model intact.
 	return scope === "cloud"
-		? "cline.code.cloud-model-selection.v1"
+		? "cline-qb.code.cloud-model-selection.v1"
 		: MODEL_SELECTION_STORAGE_KEY;
 }
 
 export function readExecutionTargetFromWindow(): ExecutionTarget {
-	try {
-		return typeof window !== "undefined" &&
-			JSON.parse(
-				window.localStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) ?? "null",
-			)?.target === "cloud"
-			? "cloud"
-			: "local";
-	} catch {
-		return "local";
-	}
+	return "local";
 }
 
 export function writeExecutionTargetToWindow(target: ExecutionTarget): void {
+	if (target === "cloud") rejectClineAccount();
 	try {
 		if (typeof window !== "undefined") {
 			window.localStorage.setItem(

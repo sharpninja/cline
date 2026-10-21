@@ -146,7 +146,7 @@ export class SyncWorker {
 	 * Start the background worker.
 	 */
 	public start(): void {
-		if (this.interval) {
+		if (!blobStorage.isReady() || this.interval) {
 			return // Already running
 		}
 
@@ -189,7 +189,7 @@ export class SyncWorker {
 	}
 
 	private async processQueue(): Promise<{ successCount: number; failCount: number }> {
-		if (this.isProcessing) {
+		if (!blobStorage.isReady() || this.isProcessing) {
 			return { successCount: 0, failCount: 0 }
 		}
 
@@ -198,9 +198,7 @@ export class SyncWorker {
 		let failCount = 0
 
 		try {
-			// Run cleanup to prevent unbounded queue growth
-			// This runs even if blob storage isn't ready, which is the main protection
-			// against misconfigured storage causing the queue to grow forever
+			// Only an enabled worker may modify queued data.
 			this.queue.cleanupFailedItems(this.options.maxRetries, this.options.maxFailedAgeMs)
 			this.queue.enforceMaxSize(this.options.maxQueueSize)
 

@@ -1,0 +1,20 @@
+{
+	"process.env.TELEMETRY_SERVICE_API_KEY": "\"\"",
+	"process.env.ERROR_SERVICE_API_KEY": "\"\"",
+	"process.env.CLINE_CODE_CLOUD_AGENTS": "\"\"",
+	"process.env.ENABLE_ERROR_AUTOCAPTURE": "\"\"",
+	"process.env.OTEL_TELEMETRY_ENABLED": "\"\"",
+	"process.env.OTEL_METRICS_EXPORTER": "\"\"",
+	"process.env.OTEL_LOGS_EXPORTER": "\"\"",
+	"process.env.OTEL_TRACES_EXPORTER": "\"\"",
+	"process.env.OTEL_EXPORTER_OTLP_PROTOCOL": "\"\"",
+	"process.env.OTEL_EXPORTER_OTLP_ENDPOINT": "\"\"",
+	"process.env.OTEL_EXPORTER_OTLP_HEADERS": "\"\"",
+	"process.env.OTEL_METRIC_EXPORT_INTERVAL": "\"\"",
+	"process.env.OTEL_SERVICE_NAME": "\"\"",
+	"process.env.CLINE_TRACE_SAMPLE_PERCENT": "\"\"",
+	"process.env.CLINE_TRACE_RECORD_CONTENT": "\"\"",
+	"process.env.LANGFUSE_BASE_URL": "\"\"",
+	"process.env.LANGFUSE_PUBLIC_KEY": "\"\"",
+	"process.env.LANGFUSE_SECRET_KEY": "\"\""
+}

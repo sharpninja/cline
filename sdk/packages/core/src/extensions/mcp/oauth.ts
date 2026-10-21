@@ -1,3 +1,4 @@
+import { assertUserConfiguredMcp } from "@cline/shared";
 import { randomUUID } from "node:crypto";
 import type {
 	OAuthClientProvider,
@@ -525,6 +526,7 @@ export function createMcpSdkTransport(input: {
 	fetch?: FetchLike;
 	restrictConfiguredHeadersToOrigin?: boolean;
 }): McpSdkAuthCapableTransport {
+	assertUserConfiguredMcp(input.registration);
 	const transport = input.registration.transport;
 	if (transport.type === "stdio") {
 		throw new Error(
@@ -631,6 +633,7 @@ export async function authorizeMcpServerOAuth(
 	if (!registration) {
 		throw new Error(`MCP server "${serverName}" is not configured.`);
 	}
+	assertUserConfiguredMcp(registration);
 	if (registration.transport.type === "stdio") {
 		throw new Error(
 			`MCP server "${serverName}" uses stdio transport and does not support OAuth browser flow.`,

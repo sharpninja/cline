@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveDocumentsClineDirectoryPath, validateStoragePath } from "@cline/shared/storage"
 import fs from "fs/promises"
 import path from "path"
 import { ensureHooksDirectoryExists, getDocumentsPath } from "@/core/storage/disk"
@@ -9,13 +10,12 @@ type LgHookScript = {
 }
 
 export async function writeLgWebhookConfig(webhookUrl: string, webhookToken: string): Promise<void> {
-	const documentsPath = await getDocumentsPath()
-	const clineDir = path.join(documentsPath, "Cline")
+	const clineDir = getStorageNamespace() ? resolveDocumentsClineDirectoryPath() : path.join(await getDocumentsPath(), "Cline")
 	const configPath = path.join(clineDir, "webhook_config.json")
 
-	await fs.mkdir(clineDir, { recursive: true })
+	await fs.mkdir(validateStoragePath(clineDir), { recursive: true })
 	await fs.writeFile(
-		configPath,
+		validateStoragePath(configPath),
 		JSON.stringify(
 			{
 				webhook_url: webhookUrl,
@@ -31,17 +31,65 @@ export async function writeLgWebhookConfig(webhookUrl: string, webhookToken: str
 
 export async function writeLgWebhookHooks(): Promise<void> {
 	const hooksDir = await ensureHooksDirectoryExists()
+	const configPath = getStorageNamespace()
+		? validateStoragePath(path.join(resolveDocumentsClineDirectoryPath(), "webhook_config.json"))
+		: undefined
 	const hooks = getLgWebhookHookScripts()
 
 	for (const hook of hooks) {
 		const hookPath = path.join(hooksDir, hook.fileName)
-		await fs.writeFile(hookPath, hook.content, "utf-8")
+		const content = configPath
+			? bindPrivateWebhookConfig(hook.content, configPath, process.platform === "win32")
+			: hook.content
+		await fs.writeFile(validateStoragePath(hookPath), content, "utf-8")
 		if (hook.mode !== undefined) {
-			await fs.chmod(hookPath, hook.mode)
+			await fs.chmod(validateStoragePath(hookPath), hook.mode)
 		}
 	}
 }
 
+/** Bind generated hooks to the canonical target approved by the host. New aliases require regeneration. */
+function bindPrivateWebhookConfig(script: string, configPath: string, powershell: boolean): string {
+	if (powershell) {
+		const encoded = Buffer.from(configPath, "utf8").toString("base64")
+		const guard = `$configPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encoded}"))
+$current = $configPath
+while ($current) {
+    try { $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $item = $null }
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        [Console]::Error.WriteLine("Webhook storage alias changed; regenerate hooks.")
+        exit 1
+    }
+    $parent = [IO.Path]::GetDirectoryName($current)
+    if ($parent -eq $current) { break }
+    $current = $parent
+}
+`
+		const lookup = `    $documentsPath = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments)
+    if (-not $documentsPath) {
+        $documentsPath = Join-Path $HOME "Documents"
+    }
+
+    $configPath = Join-Path (Join-Path $documentsPath "Cline") "webhook_config.json"`
+		if (!script.includes(lookup)) throw new Error("Webhook configuration template is missing.")
+		return guard + script.replace(lookup, "    # Configuration target was validated above.")
+	}
+	const lookup = '  const configPath = path.join(os.homedir(), "Documents", "Cline", "webhook_config.json")'
+	if (!script.includes(lookup)) throw new Error("Webhook configuration template is missing.")
+	const guard = `  const configPath = ${JSON.stringify(configPath)}
+  const disk = require("fs")
+  let current = configPath
+  while (current) {
+    let item
+    try { item = disk.lstatSync(current) } catch (error) { if (error.code !== "ENOENT") throw error }
+    if (item?.isSymbolicLink()) throw new Error("Webhook storage alias changed; regenerate hooks.")
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }`
+	return script.replace(lookup, guard)
+}
 function getLgWebhookHookScripts(): LgHookScript[] {
 	if (process.platform === "win32") {
 		return [
@@ -62,7 +110,7 @@ const TASK_START_POWERSHELL = `try {
     $rawInput = [Console]::In.ReadToEnd()
     $inputData = $null
     if ($rawInput) {
-        $inputData = $rawInput | ConvertFrom-Json -Depth 100
+        $inputData = $rawInput | ConvertFrom-Json
     }
 } catch {
     $inputData = $null
@@ -80,7 +128,7 @@ try {
         exit 0
     }
 
-    $config = Get-Content $configPath -Raw | ConvertFrom-Json -Depth 100
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
     if (-not $config.webhook_url -or -not $config.webhook_token) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -122,7 +170,7 @@ const POST_TOOL_USE_POWERSHELL = `try {
     $rawInput = [Console]::In.ReadToEnd()
     $inputData = $null
     if ($rawInput) {
-        $inputData = $rawInput | ConvertFrom-Json -Depth 100
+        $inputData = $rawInput | ConvertFrom-Json
     }
 } catch {
     $inputData = $null
@@ -140,7 +188,7 @@ try {
         exit 0
     }
 
-    $config = Get-Content $configPath -Raw | ConvertFrom-Json -Depth 100
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
     if (-not $config.webhook_url -or -not $config.webhook_token) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -178,7 +226,7 @@ const TASK_COMPLETE_POWERSHELL = `try {
     $rawInput = [Console]::In.ReadToEnd()
     $inputData = $null
     if ($rawInput) {
-        $inputData = $rawInput | ConvertFrom-Json -Depth 100
+        $inputData = $rawInput | ConvertFrom-Json
     }
 } catch {
     $inputData = $null
@@ -196,7 +244,7 @@ try {
         exit 0
     }
 
-    $config = Get-Content $configPath -Raw | ConvertFrom-Json -Depth 100
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
     if (-not $config.webhook_url -or -not $config.webhook_token) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -270,7 +318,9 @@ async function postEvent(config, payload) {
 async function main(buildPayload) {
   let input = {}
   try {
-    const rawInput = await fs.readFile(0, "utf-8")
+    const chunks = []
+    for await (const chunk of process.stdin) chunks.push(chunk)
+    const rawInput = Buffer.concat(chunks).toString("utf8")
     input = rawInput ? JSON.parse(rawInput) : {}
   } catch {}
 

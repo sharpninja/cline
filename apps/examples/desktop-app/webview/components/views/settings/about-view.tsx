@@ -1,16 +1,12 @@
 "use client";
 
-import { Bug, ExternalLink, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Bug, ExternalLink, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MemoizedMarkdown } from "@/components/ui/markdown";
 import { WhatsNewDialog } from "@/components/whats-new-dialog";
-import {
-	checkForUpdateNow,
-	restartToApplyUpdate,
-	useAppUpdateStatus,
-} from "@/hooks/use-app-update";
+import { DISABLED_UPDATE_MESSAGE } from "@/hooks/use-app-update";
 import { isBetaVersion, productNameForVersion } from "@/lib/app-channel";
 import {
 	CHANGELOG_URL_ON_GITHUB,
@@ -50,73 +46,10 @@ function useAppVersion(): string | null {
 }
 
 function UpdateRow() {
-	const status = useAppUpdateStatus();
-	const [checking, setChecking] = useState(false);
-	const [checkResult, setCheckResult] = useState<
-		"up-to-date" | "unavailable" | null
-	>(null);
-	const [restarting, setRestarting] = useState(false);
-
-	const busy =
-		checking || status.state === "checking" || status.state === "downloading";
-	const description =
-		status.state === "ready"
-			? `Version ${status.version} is downloaded and will be used the next time Cline starts.`
-			: status.state === "downloading"
-				? `Downloading version ${status.version ?? ""}…`
-				: status.state === "error" && status.error
-					? `The last check failed: ${status.error}`
-					: checkResult === "up-to-date"
-						? "You're up to date. Cline also checks on its own shortly after launch and every two hours."
-						: checkResult === "unavailable"
-							? "Update checks are only available in the desktop app."
-							: "Cline checks for updates shortly after launch and every two hours, and installs them when it restarts.";
-
 	return (
-		<div className="flex items-center justify-between gap-5 border-b py-4 max-[720px]:flex-col max-[720px]:items-stretch">
-			<div className="flex flex-col gap-1">
-				<p className="text-base font-semibold text-foreground">Updates</p>
-				<p className="text-sm text-muted-foreground">{description}</p>
-			</div>
-			{status.state === "ready" ? (
-				<Button
-					className="shrink-0"
-					disabled={restarting}
-					onClick={() => {
-						setRestarting(true);
-						void restartToApplyUpdate().then((ok) => {
-							if (!ok) setRestarting(false);
-						});
-					}}
-					size="sm"
-					type="button"
-				>
-					{restarting ? <Loader2 className="size-3 animate-spin" /> : null}
-					Restart to update
-				</Button>
-			) : (
-				<Button
-					className="shrink-0"
-					disabled={busy}
-					onClick={() => {
-						setChecking(true);
-						void checkForUpdateNow().then((result) => {
-							setChecking(false);
-							setCheckResult(result ? "up-to-date" : "unavailable");
-						});
-					}}
-					size="sm"
-					type="button"
-					variant="outline"
-				>
-					{busy ? (
-						<Loader2 className="size-3 animate-spin" />
-					) : (
-						<RefreshCw className="size-3" />
-					)}
-					Check for updates
-				</Button>
-			)}
+		<div className="flex flex-col gap-1 border-b py-4">
+			<p className="text-base font-semibold text-foreground">Updates</p>
+			<p className="text-sm text-muted-foreground">{DISABLED_UPDATE_MESSAGE}</p>
 		</div>
 	);
 }

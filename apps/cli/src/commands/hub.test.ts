@@ -9,7 +9,7 @@ const {
 	mockRequestHubDrain,
 	mockResolveProductionHubOwnerContext,
 	mockResolveSharedHubOwnerContext,
-	mockStopLocalHubServerGracefully,
+	mockRetireDiscoveredHub,
 } = vi.hoisted(() => ({
 	mockClearHubDiscovery: vi.fn(),
 	mockEnsureDetachedHubServer: vi.fn(),
@@ -25,7 +25,7 @@ const {
 		ownerId: "hub-owner",
 		discoveryPath: "/tmp/cline-data/locks/hub/owners/hub-owner.json",
 	})),
-	mockStopLocalHubServerGracefully: vi.fn(),
+	mockRetireDiscoveredHub: vi.fn(),
 }));
 
 vi.mock("@cline/core", () => ({
@@ -37,7 +37,7 @@ vi.mock("@cline/core", () => ({
 	requestHubDrain: mockRequestHubDrain,
 	resolveProductionHubOwnerContext: mockResolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext: mockResolveSharedHubOwnerContext,
-	stopLocalHubServerGracefully: mockStopLocalHubServerGracefully,
+	retireDiscoveredHub: mockRetireDiscoveredHub,
 }));
 
 import { version as cliVersion } from "../../package.json";
@@ -212,7 +212,7 @@ describe("createHubCommand", () => {
 		});
 		mockRequestHubDrain.mockResolvedValue(true);
 		mockLocalHubHasNoActiveSessions.mockResolvedValue(true);
-		mockStopLocalHubServerGracefully.mockResolvedValue(true);
+		mockRetireDiscoveredHub.mockResolvedValue(true);
 		mockEnsureDetachedHubServer.mockResolvedValue({
 			url: "ws://127.0.0.1:25463/hub",
 			authToken: "new-token",
@@ -224,7 +224,7 @@ describe("createHubCommand", () => {
 		expect(errors).toEqual([]);
 		expect(exitCode()).toBe(0);
 		expect(mockLocalHubHasNoActiveSessions).toHaveBeenCalled();
-		expect(mockStopLocalHubServerGracefully).toHaveBeenCalled();
+		expect(mockRetireDiscoveredHub).toHaveBeenCalled();
 		expect(mockEnsureDetachedHubServer).toHaveBeenCalled();
 		// The drain was never lifted manually: the drained hub was replaced.
 		expect(mockRequestHubDrain).toHaveBeenCalledTimes(1);
@@ -247,7 +247,7 @@ describe("createHubCommand", () => {
 
 		expect(exitCode()).toBe(1);
 		expect(errors[0]).toContain("still serving sessions");
-		expect(mockStopLocalHubServerGracefully).not.toHaveBeenCalled();
+		expect(mockRetireDiscoveredHub).not.toHaveBeenCalled();
 		expect(mockEnsureDetachedHubServer).not.toHaveBeenCalled();
 		expect(mockRequestHubDrain).toHaveBeenCalledTimes(2);
 		expect(mockRequestHubDrain).toHaveBeenLastCalledWith(
@@ -275,14 +275,14 @@ describe("createHubCommand", () => {
 		expect(mockRequestHubDrain).not.toHaveBeenCalled();
 	});
 
-	it("passes the selected owner to graceful stop", async () => {
+	it("passes the observed hub and selected discovery path to retirement", async () => {
 		process.env.CLINE_BUILD_ENV = "development";
 		mockReadHubDiscovery.mockResolvedValue({
 			url: "ws://127.0.0.1:25466/hub",
 			port: 25466,
 			pid: 50174,
 		});
-		mockStopLocalHubServerGracefully.mockResolvedValue(true);
+		mockRetireDiscoveredHub.mockResolvedValue(true);
 
 		const output: string[] = [];
 		let exitCode = 0;
@@ -301,10 +301,10 @@ describe("createHubCommand", () => {
 		await cmd.parseAsync(["stop"], { from: "user" });
 
 		expect(exitCode).toBe(0);
-		expect(mockStopLocalHubServerGracefully).toHaveBeenCalledWith({
-			ownerId: "hub-owner",
-			discoveryPath: "/tmp/cline-data/locks/hub/owners/hub-owner.json",
-		});
+		expect(mockRetireDiscoveredHub).toHaveBeenCalledWith(
+			{ url: "ws://127.0.0.1:25466/hub", port: 25466, pid: 50174 },
+			"/tmp/cline-data/locks/hub/owners/hub-owner.json",
+		);
 		expect(JSON.parse(output[0] || "")).toEqual({ stopped: true });
 	});
 });

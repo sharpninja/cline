@@ -1,5 +1,8 @@
-import { resolveClineBuildEnv } from "@cline/shared";
-import { resolveHubEndpointOptions } from "../discovery/defaults";
+import { getHubNamespace, resolveClineBuildEnv } from "@cline/shared";
+import {
+	hasExplicitHubPort,
+	resolveHubEndpointOptions,
+} from "../discovery/defaults";
 import {
 	resolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext,
@@ -29,7 +32,11 @@ function resolveDefaultHubOwnerContext() {
 }
 
 function shouldAllowDefaultPortFallback(hasExplicitPort: boolean): boolean {
-	return resolveClineBuildEnv() !== "production" && !hasExplicitPort;
+	return (
+		!getHubNamespace() &&
+		resolveClineBuildEnv() !== "production" &&
+		!hasExplicitPort
+	);
 }
 
 /**
@@ -59,8 +66,7 @@ export async function startHubServer(
 export async function ensureHubServer(
 	options: EnsureHubServerOptions,
 ): Promise<EnsureHubServerResult> {
-	const hasExplicitPort =
-		options.port !== undefined || !!process.env.CLINE_HUB_PORT?.trim();
+	const hasExplicitPort = options.port !== undefined || hasExplicitHubPort();
 	const endpoint = resolveHubEndpointOptions({
 		host: options.host,
 		port: options.port,

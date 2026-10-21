@@ -10,9 +10,9 @@
   own copy of this file under linux/metainfo/<channel>/.
 -->
 <component type="desktop-application">
-	<id>bot.cline.app.nightly</id>
-	<launchable type="desktop-id">Cline Nightly.desktop</launchable>
-	<name>Cline Nightly</name>
+	<id>ai.qbrain.clineqb.beta</id>
+	<launchable type="desktop-id">cline-qb beta.desktop</launchable>
+	<name>cline-qb beta</name>
 	<summary>AI coding agent</summary>
 	<developer id="bot.cline">
 		<name>Cline Bot Inc.</name>

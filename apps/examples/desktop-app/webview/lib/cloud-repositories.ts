@@ -11,7 +11,7 @@ export type {
 } from "@cline/core/cloud";
 
 type CloudRepositorySelection = { repoUrl: string; branch: string };
-const SELECTION_KEY = "cline.code.cloud-repository.v1:";
+const SELECTION_KEY = "cline-qb.code.cloud-repository.v1:";
 
 export function readCloudRepositorySelection(
 	scope: string,

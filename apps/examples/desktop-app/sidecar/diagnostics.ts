@@ -10,9 +10,10 @@ import {
 import { arch, homedir, platform, release } from "node:os";
 import { join } from "node:path";
 import { readGlobalSettings, resolveClineDataDir } from "@cline/core";
+import { validateStoragePath } from "@cline/shared/storage";
 import packageJson from "../package.json";
 import { readDesktopSettings } from "./desktop-settings";
-import { readSessionManifest } from "./paths";
+import { readSessionManifest, resolveDesktopLogPath } from "./paths";
 
 /** How much of each log file (from the end) is included in the report. */
 export const DIAGNOSTICS_LOG_TAIL_BYTES = 2 * 1024 * 1024;
@@ -40,6 +41,7 @@ export function redactDiagnosticsText(text: string): string {
 }
 
 function readTail(path: string, maxBytes: number): string | null {
+	path = validateStoragePath(path);
 	if (!existsSync(path)) return null;
 	let fd: number | undefined;
 	try {
@@ -93,7 +95,7 @@ export function buildDiagnosticsReport(
 	let text = `${JSON.stringify(report, null, 2)}\n`;
 
 	const logs = [
-		process.env.CLINE_LOG_PATH?.trim() || join(dataDir, "logs", "code.log"),
+		resolveDesktopLogPath(),
 		join(dataDir, "logs", "hub-daemon.log"),
 	];
 	for (const path of logs) {
@@ -138,6 +140,7 @@ export function writeDiagnosticsReport(
 	sessionIds: string[],
 	outputDir = resolveDiagnosticsOutputDir(),
 ): { path: string; sessionIds: string[] } {
+	outputDir = validateStoragePath(outputDir);
 	const now = new Date();
 	const report = buildDiagnosticsReport(sessionIds, now);
 	// Bun on Windows can throw EEXIST from a recursive mkdir of an existing

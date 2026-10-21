@@ -1,4 +1,4 @@
-export const WORK_IN_STORAGE_KEY = "cline.code.work-in.v1";
+export const WORK_IN_STORAGE_KEY = "cline-qb.code.work-in.v1";
 
 /** Where a new task runs. "worktree" checks out a fresh git worktree first. */
 export type WorkIn = "local" | "worktree";

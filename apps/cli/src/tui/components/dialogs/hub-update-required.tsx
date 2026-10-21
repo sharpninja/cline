@@ -9,53 +9,30 @@ export interface HubUpdateRequiredDetails {
 	hubCoreVersion?: string;
 }
 
-/**
- * Shown only for `unsupported_protocol`: the running Hub speaks a protocol
- * this CLI cannot, so nothing hub-backed works until the CLI updates. The
- * softer `build_mismatch` case (newer Hub, compatible protocol) is a toast
- * in root.tsx, not this modal.
- */
+/** An incompatible hub requires a matching reviewed product build. */
 export function HubUpdateRequiredContent(
 	props: ChoiceContext<boolean> & HubUpdateRequiredDetails,
 ) {
-	const { dialogId, dismiss, hubCoreVersion, resolve } = props;
+	const { dialogId, dismiss, hubCoreVersion } = props;
 	const palette = useDialogPalette();
-
 	useDialogKeyboard((key) => {
-		const action = resolveHubUpdateRequiredKeyAction(key);
-		if (action === "ignore") return;
-		if (action === "update") {
-			resolve(true);
-			return;
-		}
-		dismiss();
+		if (resolveHubUpdateRequiredKeyAction(key) !== "ignore") dismiss();
 	}, dialogId);
-
 	return (
 		<box flexDirection="column" paddingX={1} gap={1}>
-			<text fg="yellow">Cline Hub was updated</text>
-			<box flexDirection="column">
-				<text selectable>
-					Another Cline installation updated the shared Cline Hub
-					{hubCoreVersion ? ` (core ${hubCoreVersion})` : ""} to a version this
-					CLI cannot talk to.
-				</text>
-				<text selectable>
-					Update and restart Cline to reconnect to the running Hub.
-				</text>
-			</box>
-			<box flexDirection="row">
-				<box paddingX={1} backgroundColor={palette.act}>
-					<text fg={palette.textOnSelection}>Update and restart</text>
-				</box>
-			</box>
-			<text fg={palette.muted}>
-				Press Enter to update and restart, Esc to dismiss
+			<text fg="yellow">Incompatible hub protocol</text>
+			<text selectable>
+				This CLI cannot connect to the running hub
+				{hubCoreVersion ? " (core " + hubCoreVersion + ")" : ""}.
 			</text>
+			<text selectable>
+				Install a matching reviewed cline-qb build and restart. Upstream Cline
+				updates are disabled.
+			</text>
+			<text fg={palette.muted}>Press Enter or Esc to dismiss</text>
 		</box>
 	);
 }
-
 export interface HubOutdatedDetails {
 	hubCoreVersion?: string;
 	activeSessionCount?: number;

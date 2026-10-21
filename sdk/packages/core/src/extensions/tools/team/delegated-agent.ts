@@ -37,6 +37,7 @@ export type DelegatedAgentConnectionConfig = Pick<
 export interface DelegatedAgentRuntimeConfig
 	extends DelegatedAgentConnectionConfig {
 	cwd?: string;
+	workspaceRoot?: string;
 	providerId: string;
 	clinePlatform?: string;
 	clineIdeName?: string;
@@ -56,6 +57,7 @@ export interface DelegatedAgentRuntimeConfig
 	 * delegated-agent telemetry (Langfuse `sessionId`) groups with it.
 	 */
 	sessionId?: string;
+	configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 }
 
 export interface DelegatedAgentConfigProvider {
@@ -90,9 +92,19 @@ export function createDelegatedAgentConfigProvider(
 	initialConfig: DelegatedAgentRuntimeConfig,
 ): DelegatedAgentConfigProvider {
 	let runtimeConfig: DelegatedAgentRuntimeConfig = { ...initialConfig };
+	// Connection refreshes and optional consumers cannot replace a captured host binding.
+	const hostBinding = initialConfig.configureAgentRuntime
+		? Object.freeze({
+				configureAgentRuntime: initialConfig.configureAgentRuntime,
+				sessionId: initialConfig.sessionId,
+				cwd: initialConfig.cwd,
+				workspaceRoot: initialConfig.workspaceRoot,
+			})
+		: undefined;
 
 	return {
-		getRuntimeConfig: () => runtimeConfig,
+		getRuntimeConfig: () =>
+			hostBinding ? { ...runtimeConfig, ...hostBinding } : runtimeConfig,
 		getConnectionConfig: () => ({
 			providerId: runtimeConfig.providerId,
 			modelId: runtimeConfig.modelId,
@@ -130,6 +142,9 @@ export function buildDelegatedAgentConfig(
 		...options.configProvider.getConnectionConfig(),
 		distinctId: runtimeConfig.distinctId,
 		sessionId: runtimeConfig.sessionId,
+		configureAgentRuntime: runtimeConfig.configureAgentRuntime,
+		cwd: options.cwd ?? runtimeConfig.cwd,
+		workspaceRoot: runtimeConfig.workspaceRoot ?? runtimeConfig.cwd,
 		systemPrompt,
 		tools: options.tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,

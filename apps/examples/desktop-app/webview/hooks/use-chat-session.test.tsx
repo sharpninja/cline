@@ -9,7 +9,7 @@ import {
 } from "@/lib/command-output";
 import {
 	MODEL_SELECTION_STORAGE_KEY,
-	writeExecutionTargetToWindow,
+	EXECUTION_TARGET_STORAGE_KEY,
 	writeModelSelectionStorageToWindow,
 } from "@/lib/model-selection";
 import { startsNewThread } from "@/lib/work-in-selection";
@@ -407,6 +407,11 @@ beforeEach(async () => {
 		});
 	}
 	window.localStorage.clear();
+	// Transport tests explicitly select a direct provider; fresh installs have none.
+	writeModelSelectionStorageToWindow({
+		lastProvider: "anthropic",
+		lastModelByProvider: { anthropic: "claude-sonnet-4-6" },
+	});
 	container = document.createElement("div");
 	document.body.appendChild(container);
 	root = createRoot(container);
@@ -4547,8 +4552,8 @@ describe("useChatSession", () => {
 		window.localStorage.setItem(
 			MODEL_SELECTION_STORAGE_KEY,
 			JSON.stringify({
-				lastProvider: "cline",
-				lastModelByProvider: { cline: "remembered-model" },
+				lastProvider: "anthropic",
+				lastModelByProvider: { anthropic: "remembered-model" },
 			}),
 		);
 		const hydratedSessionId = "session-historical";
@@ -4624,14 +4629,14 @@ describe("useChatSession", () => {
 		});
 		expect(current.config.sessionId).toBeUndefined();
 		expect(current.config).toMatchObject({
-			provider: "cline",
+			provider: "anthropic",
 			model: "remembered-model",
 		});
 
 		// The next session then starts with the remembered defaults.
 		await act(async () => current.sendPrompt("Start a fresh task"));
 		expect(startConfig).toMatchObject({
-			provider: "cline",
+			provider: "anthropic",
 			model: "remembered-model",
 		});
 	});
@@ -5086,7 +5091,7 @@ describe("useChatSession", () => {
 			(message) => message.role === "error",
 		);
 		expect(errorMessage?.content).toContain("Unauthorized: invalid API key");
-		expect(errorMessage?.content).toContain("Settings");
+		expect(errorMessage?.content).toContain("provider's authentication method");
 	});
 
 	it("shows a failure relayed through chat_session_ended", async () => {
@@ -5495,7 +5500,7 @@ describe("useChatSession", () => {
 				stream: "chat_core_log",
 				chunk: JSON.stringify({
 					level: "error",
-					message: "cline requires re-authentication.",
+					message: "anthropic requires re-authentication.",
 				}),
 				ts: Date.now(),
 				index: 2,
@@ -5504,7 +5509,7 @@ describe("useChatSession", () => {
 				ok: true,
 				result: {
 					finishReason: "error",
-					text: "cline requires re-authentication.",
+					text: "anthropic requires re-authentication.",
 				},
 			});
 			await sendPromise;
@@ -5515,16 +5520,17 @@ describe("useChatSession", () => {
 		);
 		expect(errorMessages).toHaveLength(1);
 		expect(errorMessages[0]?.content).toContain(
-			"The run failed: cline requires re-authentication.",
+			"The run failed: anthropic requires re-authentication.",
 		);
 		expect(errorMessages[0]?.content).not.toContain(
 			"before a response was produced",
 		);
-		// The credential action points at the Cline account page.
-		expect(errorMessages[0]?.meta).toEqual({
+		// The credential action retains the selected direct provider.
+		expect(errorMessages[0]?.meta).toMatchObject({
 			reason: "credentials",
-			providerId: "cline",
+			providerId: "anthropic",
 		});
+		expect(errorMessages[0]?.content).not.toContain("Settings → Account");
 		// The banner-driving error state must match the bubble, or the chat
 		// renders the same failure twice.
 		expect(current.error).toBe(errorMessages[0]?.content);
@@ -5695,11 +5701,11 @@ describe("useChatSession", () => {
 					ok: true,
 					result: {
 						finishReason: "error",
-						text: "cline requires re-authentication.",
+						text: "anthropic requires re-authentication.",
 					},
 				});
 			} else {
-				rejectSend?.(new Error("cline requires re-authentication."));
+				rejectSend?.(new Error("anthropic requires re-authentication."));
 			}
 			await sendPromise;
 		});
@@ -5710,7 +5716,7 @@ describe("useChatSession", () => {
 		expect(errorMessages).toHaveLength(testSecondFailure ? 2 : 1);
 		if (rpcOutcome === "resolve" && !testSecondFailure) {
 			expect(errorMessages[0]?.content).toContain(
-				"cline requires re-authentication.",
+				"anthropic requires re-authentication.",
 			);
 		}
 		expect(current.error).toBe(
@@ -5734,7 +5740,7 @@ describe("useChatSession", () => {
 					const request = args?.request as { action?: string } | undefined;
 					if (request?.action === "start") {
 						throw new Error(
-							'OAuth credentials for provider "cline" are no longer valid. Re-run authentication for this provider.',
+							'OAuth credentials for provider "anthropic" are no longer valid. Re-run authentication for this provider.',
 						);
 					}
 				}
@@ -5754,11 +5760,14 @@ describe("useChatSession", () => {
 		const errorMessages = current.messages.filter((m) => m.role === "error");
 		expect(errorMessages).toHaveLength(1);
 		expect(errorMessages[0]?.content).toContain("no longer valid");
-		expect(errorMessages[0]?.content).toContain("Settings → Account");
-		expect(errorMessages[0]?.meta).toEqual({
+		expect(errorMessages[0]?.content).toContain(
+			"provider's authentication method",
+		);
+		expect(errorMessages[0]?.meta).toMatchObject({
 			reason: "credentials",
-			providerId: "cline",
+			providerId: "anthropic",
 		});
+		expect(errorMessages[0]?.content).not.toContain("Settings → Account");
 		expect(current.error).toBe(errorMessages[0]?.content);
 	});
 
@@ -6233,7 +6242,7 @@ describe("useChatSession", () => {
 	it("falls back to process context when the remembered workspace is stale", async () => {
 		await act(async () => root.unmount());
 		window.localStorage.setItem(
-			"cline.code.workspace-selection.v2",
+			"cline-qb.code.workspace-selection.v2",
 			JSON.stringify({
 				environments: {
 					local: {
@@ -6272,7 +6281,7 @@ describe("useChatSession", () => {
 	it.each([
 		"local",
 		"cloud",
-	] as const)("restores the Cloud target and model after viewing a %s session", async (target) => {
+	] as const)("ignores stale Cloud preferences after viewing a %s session", async (target) => {
 		await act(async () => root.unmount());
 		window.localStorage.setItem(
 			MODEL_SELECTION_STORAGE_KEY,
@@ -6284,10 +6293,16 @@ describe("useChatSession", () => {
 				},
 			}),
 		);
-		writeExecutionTargetToWindow("cloud");
-		writeModelSelectionStorageToWindow(
-			{ lastProvider: "cline", lastModelByProvider: { cline: "cloud-model" } },
-			"cloud",
+		window.localStorage.setItem(
+			EXECUTION_TARGET_STORAGE_KEY,
+			JSON.stringify({ target: "cloud" }),
+		);
+		window.localStorage.setItem(
+			"cline-qb.code.cloud-model-selection.v1",
+			JSON.stringify({
+				lastProvider: "cline",
+				lastModelByProvider: { cline: "cloud-model" },
+			}),
 		);
 		const hydratedSessionId = "session-local-history";
 		invokeMock.mockImplementation(
@@ -6322,9 +6337,9 @@ describe("useChatSession", () => {
 		await act(async () => root.render(<HookHarness />));
 
 		expect(current.config).toMatchObject({
-			executionTarget: "cloud",
-			provider: "cline",
-			model: "cloud-model",
+			executionTarget: "local",
+			provider: "openrouter",
+			model: "local-model",
 			repoUrl: undefined,
 		});
 
@@ -6357,9 +6372,9 @@ describe("useChatSession", () => {
 		});
 		expect(current.config).toMatchObject({
 			sessionId: undefined,
-			executionTarget: "cloud",
-			provider: "cline",
-			model: "cloud-model",
+			executionTarget: "local",
+			provider: "openrouter",
+			model: "local-model",
 			repoUrl: undefined,
 			branch: undefined,
 		});
@@ -6374,7 +6389,10 @@ describe("useChatSession", () => {
 				lastModelByProvider: { openrouter: "local-model" },
 			}),
 		);
-		writeExecutionTargetToWindow("cloud");
+		window.localStorage.setItem(
+			EXECUTION_TARGET_STORAGE_KEY,
+			JSON.stringify({ target: "cloud" }),
+		);
 		invokeMock.mockImplementation(async (command: string) => {
 			if (command === "get_process_context") {
 				return {
@@ -6400,7 +6418,7 @@ describe("useChatSession", () => {
 	it("binds process context and remembered workspace to the requested remote environment", async () => {
 		await act(async () => root.unmount());
 		window.localStorage.setItem(
-			"cline.code.workspace-selection.v2",
+			"cline-qb.code.workspace-selection.v2",
 			JSON.stringify({
 				environments: {
 					local: {
@@ -6482,7 +6500,7 @@ describe("useChatSession", () => {
 			});
 		});
 		window.localStorage.setItem(
-			"cline.code.workspace-selection.v2",
+			"cline-qb.code.workspace-selection.v2",
 			JSON.stringify({
 				environments: {
 					local: {

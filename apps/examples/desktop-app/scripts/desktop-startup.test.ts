@@ -1,7 +1,13 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { startupFixtureEnvironment } from "./startup-fixture-environment";
 import {
 	closeSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	writeFileSync,
 	mkdtempSync,
 	openSync,
 	readFileSync,
@@ -14,12 +20,50 @@ import { fileURLToPath } from "node:url";
 // Exercise the actual compiled entrypoint: source-only tests miss mixed SDK
 // build identities between the desktop client and its embedded Hub daemon.
 
+function prepareEnvironment(
+	root: string,
+	extra: Record<string, string>,
+): NodeJS.ProcessEnv {
+	const env = startupFixtureEnvironment(root, process.env, extra);
+	for (const key of [
+		"HOME",
+		"XDG_CONFIG_HOME",
+		"XDG_DATA_HOME",
+		"XDG_CACHE_HOME",
+		"XDG_STATE_HOME",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"TEMP",
+	])
+		mkdirSync(env[key]!, { recursive: true });
+	return env;
+}
+function upstreamSnapshot(paths: string[]): Record<string, string> {
+	const entries: Record<string, string> = {};
+	function walk(path: string) {
+		for (const entry of readdirSync(path, { withFileTypes: true }).sort(
+			(a, b) => a.name.localeCompare(b.name),
+		)) {
+			const child = join(path, entry.name);
+			if (entry.isDirectory()) {
+				entries[child] = "directory";
+				walk(child);
+			} else if (entry.isFile())
+				entries[child] = createHash("sha256")
+					.update(readFileSync(child))
+					.digest("hex");
+			else entries[child] = "unexpected-non-file";
+		}
+	}
+	for (const path of paths) walk(path);
+	return entries;
+}
 let compiledBinaryDir: string | undefined;
 let compiledBinary: string | undefined;
 
 function resolveSidecarBinary(): string {
-	if (process.env.CLINE_TEST_SIDECAR_BIN) {
-		return resolve(process.env.CLINE_TEST_SIDECAR_BIN);
+	if (process.env.CLINE_QB_TEST_SIDECAR_BIN) {
+		return resolve(process.env.CLINE_QB_TEST_SIDECAR_BIN);
 	}
 	if (compiledBinary) {
 		return compiledBinary;
@@ -41,7 +85,12 @@ function resolveSidecarBinary(): string {
 			"--outfile",
 			binary,
 		],
-		{ cwd: compiledBinaryDir, encoding: "utf8", timeout: 60_000 },
+		{
+			cwd: compiledBinaryDir,
+			env: prepareEnvironment(compiledBinaryDir, {}),
+			encoding: "utf8",
+			timeout: 60_000,
+		},
 	);
 	expect(build.status, build.stderr || String(build.error)).toBe(0);
 	compiledBinary = binary;
@@ -74,22 +123,20 @@ async function runStartupScenario(
 	const stderr = openSync(stderrPath, "w");
 	let child: ReturnType<typeof Bun.spawn> | undefined;
 	let hubPid: number | undefined;
+	const upstreamPaths = [
+		join(root, "home", ".cline"),
+		join(root, "home", "Cline"),
+		join(root, "home", "Documents", "Cline"),
+	];
+	for (const path of upstreamPaths) {
+		mkdirSync(path, { recursive: true });
+		writeFileSync(join(path, "canary.json"), '{"fixture":"unchanged"}');
+	}
+	const before = upstreamSnapshot(upstreamPaths);
 	try {
 		const binary = resolveSidecarBinary();
 
-		const env = Object.fromEntries(
-			Object.entries(process.env).filter(
-				([key]) =>
-					!/^(CLINE_|OTEL_|TELEMETRY_|ERROR_SERVICE_)/.test(key) &&
-					!/^(https?_proxy|all_proxy|no_proxy)$/i.test(key),
-			),
-		);
-		Object.assign(env, {
-			CLINE_DIR: root,
-			CLINE_DATA_DIR: join(root, "data"),
-			CLINE_HUB_DISCOVERY_PATH: discoveryPath,
-			...extraEnv,
-		});
+		const env = prepareEnvironment(root, extraEnv);
 		// Bootstrap on an OS-assigned port using the same executable. Pin the
 		// desktop to that port so this test cannot touch a developer's real Hub,
 		// even if a regression makes it reject its own discovery record.
@@ -102,8 +149,14 @@ async function runStartupScenario(
 			0,
 		);
 		const hub = JSON.parse(readFileSync(discoveryPath, "utf8"));
+		expect(
+			Number.isInteger(hub.pid) && hub.pid > 0 && hub.pid !== process.pid,
+		).toBe(true);
+		expect(
+			Number.isInteger(hub.port) && hub.port > 0 && hub.port <= 65535,
+		).toBe(true);
 		hubPid = hub.pid;
-		env.CLINE_HUB_PORT = String(hub.port);
+		env.CLINE_QB_HUB_PORT = String(hub.port);
 		child = Bun.spawn([binary], {
 			cwd: root,
 			env,
@@ -144,7 +197,8 @@ async function runStartupScenario(
 		// A failed bootstrap may still have published a discovery record.
 		try {
 			hubPid ??= JSON.parse(readFileSync(discoveryPath, "utf8")).pid;
-			if (hubPid) process.kill(hubPid, "SIGTERM");
+			if (Number.isInteger(hubPid) && hubPid! > 0 && hubPid !== process.pid)
+				process.kill(hubPid!, "SIGTERM");
 		} catch {
 			/* The isolated Hub may already have exited. */
 		}
@@ -166,6 +220,7 @@ async function runStartupScenario(
 		}
 		closeSync(stdout);
 		closeSync(stderr);
+		const after = upstreamSnapshot(upstreamPaths);
 		// Losing a temp directory must never fail a signed release build: this
 		// runs after every assertion, so a lingering grandchild holding a
 		// handle would otherwise fail the publish over passing tests.
@@ -179,8 +234,49 @@ async function runStartupScenario(
 		} catch {
 			/* The runner discards its temp directory anyway. */
 		}
+		expect(after, "Upstream fixture state changed").toEqual(before);
+		console.info(
+			"TEST-QB-068: upstream fixture canaries unchanged after startup attempt",
+		);
 	}
 }
+
+test("compiled desktop blocks unsigned Hub bootstrap before discovery or readiness", () => {
+	const root = mkdtempSync(join(tmpdir(), "cline-desktop-unsigned-"));
+	const discoveryPath = join(root, "hub.json");
+	const upstreamPaths = [
+		join(root, "home", ".cline"),
+		join(root, "home", "Cline"),
+		join(root, "home", "Documents", "Cline"),
+	];
+	for (const path of upstreamPaths) {
+		mkdirSync(path, { recursive: true });
+		writeFileSync(join(path, "canary.json"), '{"fixture":"unchanged"}');
+	}
+	const before = upstreamSnapshot(upstreamPaths);
+	try {
+		const launch = spawnSync(
+			resolveSidecarBinary(),
+			["--remote-hub-ensure", "--discovery-path", discoveryPath, "--cwd", root],
+			{
+				cwd: root,
+				env: prepareEnvironment(root, {}),
+				encoding: "utf8",
+				timeout: 20_000,
+			},
+		);
+		expect(launch.error).toBeUndefined();
+		expect(launch.status).not.toBe(0);
+		expect(launch.stderr).toMatch(
+			/Hub governance identity is not initialized by trusted host bootstrap/,
+		);
+		expect(launch.stdout).not.toContain('"type":"ready"');
+		expect(existsSync(discoveryPath)).toBe(false);
+		expect(upstreamSnapshot(upstreamPaths)).toEqual(before);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 100_000);
 
 test("compiled desktop backend publishes its endpoint with its own Hub", async () => {
 	await runStartupScenario({});

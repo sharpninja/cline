@@ -588,7 +588,6 @@ function App(props: TuiProps) {
 		});
 	}, [hubBuildWatchEnabled]);
 
-	const onHubUpdateRestart = props.onHubUpdateRestart;
 	useEffect(() => {
 		if (!hubBuildMismatch) return;
 		setHubBuildMismatch(null);
@@ -665,7 +664,7 @@ function App(props: TuiProps) {
 			showToast(
 				`The shared Cline Hub was updated${
 					hubCoreVersion ? ` (core ${hubCoreVersion})` : ""
-				}. Run 'cline update' and restart when convenient.`,
+				}. Install a matching reviewed cline-qb build and restart.`,
 				"info",
 			);
 			return;
@@ -679,13 +678,9 @@ function App(props: TuiProps) {
 					<HubUpdateRequiredContent {...ctx} hubCoreVersion={hubCoreVersion} />
 				),
 			})
-			.then((update) => {
-				if (update) {
-					(onHubUpdateRestart ?? exitCline)();
-					return;
-				}
+			.then(() => {
 				showToast(
-					"Hub still differs from this CLI. Run 'cline update' and restart when convenient.",
+					"Hub still differs from this CLI. Install a matching reviewed cline-qb build and restart.",
 					"info",
 				);
 				refocusTextareaRef.current();
@@ -693,7 +688,7 @@ function App(props: TuiProps) {
 			.catch(() => {
 				refocusTextareaRef.current();
 			});
-	}, [dialog, exitCline, hubBuildMismatch, onHubUpdateRestart, showToast]);
+	}, [dialog, hubBuildMismatch, showToast]);
 
 	const {
 		appendEntry: appendSessionEntry,

@@ -932,6 +932,11 @@ export function MarketplaceView({
 				/>
 			) : null}
 
+			<output className="rounded-lg border p-4 text-sm text-muted-foreground">
+				Cline marketplace is unavailable in cline-qb. Configure a direct MCP
+				server or manage installed local extensions in Settings.
+			</output>
+
 			{!catalog && !errorMessage ? (
 				<div className="flex min-h-80 items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">
 					<Spinner className="mr-2" />

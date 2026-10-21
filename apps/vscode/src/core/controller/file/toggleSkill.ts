@@ -21,6 +21,13 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 		throw new Error("Missing or invalid parameters for toggleSkill")
 	}
 
+	// Persist the enabled state to the SKILL.md frontmatter as well. The SDK
+	// builds the model's skill list / `skills` tool from the frontmatter
+	// `disabled` flag, not from the extension's UI toggle state, so without this
+	// write a skill toggled off in the sidebar would still be offered to the
+	// model (ENG-1995). The helper is a no-op for remote skills (no backing file).
+	await setSkillDisabledInFrontmatter(skillPath, enabled)
+
 	let globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
 	let localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
 
@@ -39,13 +46,6 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 		localToggles = { ...localToggles, [skillPath]: enabled }
 		controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
 	}
-
-	// Persist the enabled state to the SKILL.md frontmatter as well. The SDK
-	// builds the model's skill list / `skills` tool from the frontmatter
-	// `disabled` flag, not from the extension's UI toggle state, so without this
-	// write a skill toggled off in the sidebar would still be offered to the
-	// model (ENG-1995). The helper is a no-op for remote skills (no backing file).
-	await setSkillDisabledInFrontmatter(skillPath, enabled)
 
 	await controller.postStateToWebview()
 

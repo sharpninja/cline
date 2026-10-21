@@ -49,6 +49,7 @@ describe("marketplace installer", () => {
 			process.env.CLINE_MCP_SETTINGS_PATH = originalMcpSettingsPath;
 		}
 		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
 	});
 
 	function createInstalledOfficialPlugin(
@@ -133,89 +134,83 @@ describe("marketplace installer", () => {
 		});
 	});
 
-	it("runs skills globally for Cline without prompts", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
-		const spawnCommand = vi.fn(async () => {
-			mkdirSync(join(homeDir, ".agents", "skills", "web-design-guidelines"), {
-				recursive: true,
-			});
-			writeFileSync(
-				join(homeDir, ".agents", "skills", "web-design-guidelines", "SKILL.md"),
-				"---\nname: web-design-guidelines\n---\n",
-			);
-			return {
+	it("TEST-QB-016/017: refuses fresh skill installation without creating a global directory", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "qb-market-refusal-"));
+		process.env.HOME = fixture;
+		process.env.CLINE_DIR = join(fixture, ".cline");
+		const target = join(fixture, ".agents", "skills");
+		try {
+			const spawnCommand = vi.fn(async () => ({
 				exitCode: 0,
-				stdout: "installed",
-				stderr: "",
-			};
-		});
-
-		await installMarketplaceEntry(
-			{
-				entry: {
-					id: "web-design-guidelines",
-					type: "skill",
-					name: "Web Design Guidelines",
-					install: {
-						args: [
-							"vercel-labs/agent-skills",
-							"--skill",
-							"web-design-guidelines",
-						],
+				stdout: "token=fixture-only",
+				stderr: "Failed to install",
+			}));
+			const loadCatalog = vi.fn(async () => ({ entries: [] }));
+			await expect(
+				installMarketplaceEntry(
+					{
+						entry: {
+							id: "legacy",
+							type: "skill",
+							install: {
+								args: [
+									"vercel-labs/agent-skills",
+									"--skill",
+									"web-design-guidelines",
+								],
+							},
+						},
 					},
-				},
-			},
-			{ spawnCommand },
-		);
-
-		expect(spawnCommand).toHaveBeenCalledWith("npx", [
-			"-y",
-			"skills@latest",
-			"add",
-			"vercel-labs/agent-skills",
-			"--skill",
-			"web-design-guidelines",
-			"-g",
-			"-a",
-			"cline",
-			"-y",
-		]);
+					{ spawnCommand },
+				),
+			).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+			expect(spawnCommand).not.toHaveBeenCalled();
+			expect(loadCatalog).not.toHaveBeenCalled();
+			expect(existsSync(target)).toBe(false);
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
 	});
 
-	it("skips skill install commands when the global skill already exists", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
-		mkdirSync(join(homeDir, ".agents", "skills", "cline-sdk"), {
-			recursive: true,
-		});
-		writeFileSync(
-			join(homeDir, ".agents", "skills", "cline-sdk", "SKILL.md"),
-			"---\nname: cline-sdk\n---\n",
-		);
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 0,
-			stdout: "",
-			stderr: "",
-		}));
-
-		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "cline-sdk",
-						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
+	it("TEST-QB-016/017: refuses installed skill requests without changing existing bytes", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "qb-market-refusal-"));
+		process.env.HOME = fixture;
+		process.env.CLINE_DIR = join(fixture, ".cline");
+		const target = join(fixture, ".agents", "skills");
+		mkdirSync(join(target, "web-design-guidelines"), { recursive: true });
+		const sentinel = join(target, "web-design-guidelines", "SKILL.md");
+		writeFileSync(sentinel, "existing user skill");
+		try {
+			const spawnCommand = vi.fn(async () => ({
+				exitCode: 0,
+				stdout: "token=fixture-only",
+				stderr: "Failed to install",
+			}));
+			const loadCatalog = vi.fn(async () => ({ entries: [] }));
+			await expect(
+				installMarketplaceEntry(
+					{
+						entry: {
+							id: "legacy",
+							type: "skill",
+							install: {
+								args: [
+									"vercel-labs/agent-skills",
+									"--skill",
+									"web-design-guidelines",
+								],
+							},
+						},
 					},
-				},
-				{ spawnCommand },
-			),
-		).resolves.toMatchObject({
-			status: "installed",
-			message: "Cline SDK is already installed.",
-		});
-		expect(spawnCommand).not.toHaveBeenCalled();
+					{ spawnCommand },
+				),
+			).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+			expect(spawnCommand).not.toHaveBeenCalled();
+			expect(loadCatalog).not.toHaveBeenCalled();
+			expect(readFileSync(sentinel, "utf8")).toBe("existing user skill");
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
 	});
 
 	it("reports Cline global skills as marketplace-installed", () => {
@@ -243,42 +238,44 @@ describe("marketplace installer", () => {
 		).toEqual({ installedKeys: ["skill:cline-sdk"] });
 	});
 
-	it("accepts skill installs that create Cline global skills", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		const clineDir = join(homeDir, ".cline");
-		process.env.HOME = homeDir;
-		process.env.CLINE_DIR = clineDir;
-		const spawnCommand = vi.fn(async () => {
-			mkdirSync(join(clineDir, "skills", "cline-sdk"), {
-				recursive: true,
-			});
-			writeFileSync(
-				join(clineDir, "skills", "cline-sdk", "SKILL.md"),
-				"---\nname: cline-sdk\n---\n",
-			);
-			return {
+	it("TEST-QB-016/017: refuses skill installation with a legacy Cline directory override", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "qb-market-refusal-"));
+		process.env.HOME = fixture;
+		process.env.CLINE_DIR = join(fixture, ".cline");
+		const target = join(fixture, ".agents", "skills");
+		mkdirSync(process.env.CLINE_DIR, { recursive: true });
+		try {
+			const spawnCommand = vi.fn(async () => ({
 				exitCode: 0,
-				stdout: "installed",
-				stderr: "",
-			};
-		});
-
-		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "cline-sdk",
-						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
+				stdout: "token=fixture-only",
+				stderr: "Failed to install",
+			}));
+			const loadCatalog = vi.fn(async () => ({ entries: [] }));
+			await expect(
+				installMarketplaceEntry(
+					{
+						entry: {
+							id: "legacy",
+							type: "skill",
+							install: {
+								args: [
+									"vercel-labs/agent-skills",
+									"--skill",
+									"web-design-guidelines",
+								],
+							},
+						},
 					},
-				},
-				{ spawnCommand },
-			),
-		).resolves.toMatchObject({
-			status: "installed",
-			message: "Installed Cline SDK globally for Cline.",
-		});
+					{ spawnCommand },
+				),
+			).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+			expect(spawnCommand).not.toHaveBeenCalled();
+			expect(loadCatalog).not.toHaveBeenCalled();
+			expect(existsSync(target)).toBe(false);
+			expect(existsSync(join(process.env.CLINE_DIR, "skills"))).toBe(false);
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
 	});
 
 	it("removes Cline global marketplace skills without prompts", async () => {
@@ -351,216 +348,161 @@ describe("marketplace installer", () => {
 		).toEqual({ installedKeys: [] });
 	});
 
-	it("rejects skill installs that exit zero but report failure", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
+	it("TEST-QB-016/017: never invokes a skill installer even if it would return exit zero", async () => {
 		const spawnCommand = vi.fn(async () => ({
 			exitCode: 0,
-			stdout: "Failed to install 1",
-			stderr: "",
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
 		}));
-
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
 		await expect(
 			installMarketplaceEntry(
 				{
 					entry: {
-						id: "cline-sdk",
+						id: "legacy",
 						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
-					},
-				},
-				{ spawnCommand },
-			),
-		).rejects.toThrow("Skill install failed");
-	});
-
-	it("redacts common secret formats from failed install output", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 1,
-			stdout:
-				"Authorization: Bearer stdout-token\nAuthorization: Basic basic-token\napi key stdout-key\nOPENAI_API_KEY=compound-key",
-			stderr:
-				"TOKEN=stderr-token\npassword is stderr-password\nANTHROPIC_SECRET_KEY=anthropic-secret",
-		}));
-
-		let message = "";
-		try {
-			await installMarketplaceEntry(
-				{
-					entry: {
-						id: "cline-sdk",
-						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
-					},
-				},
-				{ spawnCommand },
-			);
-		} catch (error) {
-			message = error instanceof Error ? error.message : String(error);
-		}
-
-		expect(message).toContain("Authorization: Bearer [redacted]");
-		expect(message).toContain("Authorization: [redacted]");
-		expect(message).not.toContain("Authorization: Bearer [redacted]]");
-		expect(message).toContain("api key [redacted]");
-		expect(message).toContain("OPENAI_API_KEY=[redacted]");
-		expect(message).toContain("TOKEN=[redacted]");
-		expect(message).toContain("password is [redacted]");
-		expect(message).toContain("ANTHROPIC_SECRET_KEY=[redacted]");
-		expect(message).not.toContain("stdout-token");
-		expect(message).not.toContain("basic-token");
-		expect(message).not.toContain("stdout-key");
-		expect(message).not.toContain("compound-key");
-		expect(message).not.toContain("stderr-token");
-		expect(message).not.toContain("stderr-password");
-		expect(message).not.toContain("anthropic-secret");
-	});
-
-	it("rejects skill installs before spawning when the global skill directory is not writable", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
-		mkdirSync(join(homeDir, ".agents"), { recursive: true });
-		writeFileSync(join(homeDir, ".agents", "skills"), "");
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 0,
-			stdout: "",
-			stderr: "",
-		}));
-
-		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "cline-sdk",
-						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
-					},
-				},
-				{ spawnCommand },
-			),
-		).rejects.toThrow(
-			"Cannot install skill globally because ~/.agents/skills is not writable",
-		);
-		expect(spawnCommand).not.toHaveBeenCalled();
-	});
-
-	it("rejects skill installs that do not create a global skill", async () => {
-		const homeDir = mkdtempSync(join(tmpdir(), "cline-marketplace-home-"));
-		process.env.HOME = homeDir;
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 0,
-			stdout: "Installation complete",
-			stderr: "",
-		}));
-
-		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "cline-sdk",
-						type: "skill",
-						name: "Cline SDK",
-						install: { args: ["cline/sdk-skill"] },
-					},
-				},
-				{ spawnCommand },
-			),
-		).rejects.toThrow("was not found in Cline's global skills directories");
-	});
-
-	it("runs official plugin installs through the current Cline CLI", async () => {
-		process.env.CLINE_WRAPPER_PATH = "/usr/local/bin/cline";
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 0,
-			stdout: JSON.stringify({ installPath: "/tmp/plugin" }),
-			stderr: "",
-		}));
-
-		await installMarketplaceEntry(
-			{
-				entry: {
-					id: "marketplace-test-plugin",
-					type: "plugin",
-					name: "Marketplace Test Plugin",
-					install: { args: ["marketplace-test-plugin"] },
-				},
-			},
-			{ spawnCommand },
-		);
-
-		expect(spawnCommand).toHaveBeenCalledWith("/usr/local/bin/cline", [
-			"plugin",
-			"install",
-			"marketplace-test-plugin",
-			"--json",
-		]);
-	});
-
-	it("runs MCP installs through the current Cline CLI without prompts", async () => {
-		process.env.CLINE_WRAPPER_PATH = "/usr/local/bin/cline";
-		const spawnCommand = vi.fn(async () => ({
-			exitCode: 0,
-			stdout: JSON.stringify({
-				name: "context7",
-				status: "installed",
-				transport: {
-					type: "streamableHttp",
-					url: "https://mcp.context7.com/mcp",
-					headers: {
-						Authorization: "Bearer token",
-					},
-				},
-			}),
-			stderr: "",
-		}));
-
-		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "context7",
-						type: "mcp",
-						name: "Context7",
 						install: {
 							args: [
-								"context7",
-								"--transport",
-								"http",
-								"https://mcp.context7.com/mcp",
-								"--header",
-								"Authorization: Bearer token",
+								"vercel-labs/agent-skills",
+								"--skill",
+								"web-design-guidelines",
 							],
 						},
 					},
 				},
 				{ spawnCommand },
 			),
-		).resolves.toMatchObject({
-			status: "installed",
-			message: "Installed Context7.",
-			details: {
-				name: "context7",
-				status: "installed",
-			},
-		});
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
+	});
 
-		expect(spawnCommand).toHaveBeenCalledWith("/usr/local/bin/cline", [
-			"mcp",
-			"install",
-			"--yes",
-			"--json",
-			"context7",
-			"--transport",
-			"http",
-			"https://mcp.context7.com/mcp",
-			"--header",
-			"Authorization: Bearer token",
-		]);
+	it("TEST-QB-016/017: rejects before reading secret-bearing installer input", async () => {
+		const spawnCommand = vi.fn(async () => ({
+			exitCode: 0,
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
+		}));
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			installMarketplaceEntry(
+				{
+					get entry() {
+						throw new Error("fixture-secret-never-read");
+					},
+				},
+				{ spawnCommand },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
+	});
+
+	it("TEST-QB-016/017: refuses before probing an unusable global skills path", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "qb-market-refusal-"));
+		process.env.HOME = fixture;
+		process.env.CLINE_DIR = join(fixture, ".cline");
+		const target = join(fixture, ".agents", "skills");
+		mkdirSync(join(fixture, ".agents"));
+		writeFileSync(target, "do not replace");
+		try {
+			const spawnCommand = vi.fn(async () => ({
+				exitCode: 0,
+				stdout: "token=fixture-only",
+				stderr: "Failed to install",
+			}));
+			const loadCatalog = vi.fn(async () => ({ entries: [] }));
+			await expect(
+				installMarketplaceEntry(
+					{
+						entry: {
+							id: "legacy",
+							type: "skill",
+							install: {
+								args: [
+									"vercel-labs/agent-skills",
+									"--skill",
+									"web-design-guidelines",
+								],
+							},
+						},
+					},
+					{ spawnCommand },
+				),
+			).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+			expect(spawnCommand).not.toHaveBeenCalled();
+			expect(loadCatalog).not.toHaveBeenCalled();
+			expect(readFileSync(target, "utf8")).toBe("do not replace");
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
+	});
+
+	it("TEST-QB-016/017: refuses missing install arguments without starting a process", async () => {
+		const spawnCommand = vi.fn(async () => ({
+			exitCode: 0,
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
+		}));
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			installMarketplaceEntry(
+				{ entry: { id: "legacy", type: "skill", install: { args: [] } } },
+				{ spawnCommand },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
+	});
+
+	it("TEST-QB-016/017: ignores an upstream CLI wrapper for official plugin installation", async () => {
+		process.env.CLINE_WRAPPER_PATH = "/fixture/upstream-cline-must-not-execute";
+		const spawnCommand = vi.fn(async () => ({
+			exitCode: 0,
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
+		}));
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			installMarketplaceEntry(
+				{
+					entry: { id: "legacy", type: "plugin", install: { args: ["goal"] } },
+				},
+				{ spawnCommand },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
+	});
+
+	it("TEST-QB-016/017: refuses catalog MCP installation without invoking a CLI", async () => {
+		const spawnCommand = vi.fn(async () => ({
+			exitCode: 0,
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
+		}));
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			installMarketplaceEntry(
+				{
+					entry: {
+						id: "legacy",
+						type: "mcp",
+						install: {
+							args: [
+								"context7",
+								"--transport",
+								"http",
+								"https://mcp.context7.com/mcp",
+							],
+						},
+					},
+				},
+				{ spawnCommand },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
 	});
 
 	it("uninstalls official marketplace plugins through the shared core service", async () => {
@@ -594,82 +536,62 @@ describe("marketplace installer", () => {
 		expect(existsSync(installPath)).toBe(false);
 	});
 
-	it("resolves desktop installs from the server catalog instead of browser-sent args", async () => {
-		process.env.CLINE_WRAPPER_PATH = "/usr/local/bin/cline";
+	it("TEST-QB-016/017: refuses a cached browser install before loading its catalog", async () => {
 		const spawnCommand = vi.fn(async () => ({
 			exitCode: 0,
-			stdout: JSON.stringify({ installPath: "/tmp/plugin" }),
-			stderr: "",
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
 		}));
-
-		await installMarketplaceEntryForDesktopCommand(
-			{
-				entry: {
-					id: "marketplace-test-plugin",
-					type: "plugin",
-					name: "Tampered",
-					install: { args: ["malicious-source"] },
-				},
-			},
-			{
-				spawnCommand,
-				loadCatalog: async () => ({
-					entries: [
-						{
-							id: "marketplace-test-plugin",
-							type: "plugin",
-							name: "Marketplace Test Plugin",
-							install: { args: ["marketplace-test-plugin"] },
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			installMarketplaceEntryForDesktopCommand(
+				{
+					entry: {
+						id: "legacy",
+						type: "skill",
+						install: {
+							args: [
+								"vercel-labs/agent-skills",
+								"--skill",
+								"web-design-guidelines",
+							],
 						},
-					],
-				}),
-			},
-		);
-
-		expect(spawnCommand).toHaveBeenCalledWith("/usr/local/bin/cline", [
-			"plugin",
-			"install",
-			"marketplace-test-plugin",
-			"--json",
-		]);
+					},
+				},
+				{ spawnCommand, loadCatalog },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
+		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
 	});
 
-	it("resolves desktop uninstalls from the server catalog instead of browser-sent args", async () => {
-		const clineDir = mkdtempSync(join(tmpdir(), "cline-marketplace-plugin-"));
-		process.env.CLINE_DIR = clineDir;
-		const installPath = createInstalledOfficialPlugin(clineDir, "goal");
+	it("TEST-QB-016/017: refuses catalog removal before loading its catalog", async () => {
 		const spawnCommand = vi.fn(async () => ({
 			exitCode: 0,
-			stdout: "",
-			stderr: "",
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
 		}));
-
-		await uninstallMarketplaceEntryForDesktopCommand(
-			{
-				entry: {
-					id: "goal",
-					type: "plugin",
-					name: "Tampered",
-					install: { args: ["malicious-source"] },
-				},
-			},
-			{
-				spawnCommand,
-				loadCatalog: async () => ({
-					entries: [
-						{
-							id: "goal",
-							type: "plugin",
-							name: "Goal",
-							install: { args: ["goal"] },
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
+		await expect(
+			uninstallMarketplaceEntryForDesktopCommand(
+				{
+					entry: {
+						id: "legacy",
+						type: "skill",
+						install: {
+							args: [
+								"vercel-labs/agent-skills",
+								"--skill",
+								"web-design-guidelines",
+							],
 						},
-					],
-				}),
-			},
-		);
-
+					},
+				},
+				{ spawnCommand, loadCatalog },
+			),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
 		expect(spawnCommand).not.toHaveBeenCalled();
-		expect(existsSync(installPath)).toBe(false);
+		expect(loadCatalog).not.toHaveBeenCalled();
 	});
 
 	it("uninstalls MCP marketplace entries from Cline MCP settings", async () => {
@@ -900,55 +822,41 @@ describe("marketplace installer", () => {
 		).toEqual({ installedKeys: ["plugin:goal"] });
 	});
 
-	it("rejects invalid marketplace entries before spawning commands", async () => {
+	it("TEST-QB-016/017: refuses malformed marketplace entries before argument interpretation", async () => {
 		const spawnCommand = vi.fn(async () => ({
 			exitCode: 0,
-			stdout: "",
-			stderr: "",
+			stdout: "token=fixture-only",
+			stderr: "Failed to install",
 		}));
-
+		const loadCatalog = vi.fn(async () => ({ entries: [] }));
 		await expect(
-			installMarketplaceEntry(
-				{
-					entry: {
-						id: "bad",
-						type: "skill",
-						install: { args: [] },
-					},
-				},
-				{ spawnCommand },
-			),
-		).rejects.toThrow("marketplace install args are required");
+			installMarketplaceEntry({ entry: 42 }, { spawnCommand }),
+		).rejects.toThrow("Cline marketplace is unavailable in cline-qb");
 		expect(spawnCommand).not.toHaveBeenCalled();
+		expect(loadCatalog).not.toHaveBeenCalled();
 	});
 
-	it("fetches the marketplace catalog through the server helper", async () => {
-		const fetchImpl = vi.fn(async () => {
-			return new Response(JSON.stringify({ version: 1, entries: [] }), {
-				headers: { "content-type": "application/json" },
-			});
-		});
-
-		await expect(fetchMarketplaceCatalog(fetchImpl)).resolves.toEqual({
-			version: 1,
-			entries: [],
-		});
-		expect(fetchImpl).toHaveBeenCalledWith(
-			"https://cline.github.io/marketplace/catalog.json",
-			{ headers: { Accept: "application/json" } },
+	it("TEST-QB-016/017: refuses catalog fetching despite a legacy URL override", async () => {
+		vi.stubEnv(
+			"CLINE_MARKETPLACE_CATALOG_URL",
+			"https://fixture.invalid/legacy",
 		);
-	});
-
-	it("surfaces marketplace catalog upstream failures", async () => {
-		const fetchImpl = vi.fn(async () => {
-			return new Response("nope", {
-				status: 503,
-				statusText: "Service Unavailable",
-			});
-		});
-
+		const fetchImpl = vi.fn(
+			async () => new Response("unavailable", { status: 200 }),
+		);
 		await expect(fetchMarketplaceCatalog(fetchImpl)).rejects.toThrow(
-			"Failed to fetch marketplace catalog: 503 Service Unavailable",
+			"Cline marketplace is unavailable in cline-qb",
 		);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it("TEST-QB-016/017: reports product policy without exposing upstream fetch errors", async () => {
+		const fetchImpl = vi.fn(async () => {
+			throw new Error("fixture-upstream-error-must-not-leak");
+		});
+		await expect(fetchMarketplaceCatalog(fetchImpl)).rejects.toThrow(
+			"Cline marketplace is unavailable in cline-qb",
+		);
+		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 });

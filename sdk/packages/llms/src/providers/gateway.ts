@@ -124,6 +124,7 @@ export interface Gateway {
 }
 
 class GatewayModelAdapter implements AgentModel {
+	readonly enforcesHostToolExecution = true;
 	constructor(
 		private readonly gateway: DefaultGateway,
 		private readonly selection: GatewayModelSelection,
@@ -167,8 +168,15 @@ class GatewayModelAdapter implements AgentModel {
 			modelId: this.selection.modelId ?? "",
 			systemPrompt: request.systemPrompt,
 			messages: request.messages,
-			tools: this.defaults?.tools ?? request.tools,
-			modelTools: this.defaults?.modelTools ?? request.modelTools,
+			toolExecutionPolicy: request.toolExecutionPolicy,
+			tools:
+				request.toolExecutionPolicy === "host-only"
+					? request.tools
+					: (this.defaults?.tools ?? request.tools),
+			modelTools:
+				request.toolExecutionPolicy === "host-only"
+					? request.modelTools
+					: (this.defaults?.modelTools ?? request.modelTools),
 			temperature:
 				(request.options?.temperature as number | undefined) ??
 				this.defaults?.temperature,
@@ -333,6 +341,15 @@ export class DefaultGateway implements Gateway {
 	async stream(
 		request: GatewayStreamRequest,
 	): Promise<AsyncIterable<AgentModelEvent>> {
+		if (
+			request.toolExecutionPolicy !== undefined &&
+			(request.toolExecutionPolicy !== "host-only" ||
+				request.modelTools?.length)
+		) {
+			throw new Error(
+				"Cannot enforce host-only tool execution with provider-executed tools or an unknown policy.",
+			);
+		}
 		const resolved = this.registry.resolveModel({
 			providerId: request.providerId,
 			modelId: request.modelId || undefined,
@@ -367,6 +384,14 @@ export class DefaultGateway implements Gateway {
 			request.providerId,
 		);
 		const provider = await providerRecord.createProvider(providerRecord.config);
+		if (
+			request.toolExecutionPolicy === "host-only" &&
+			provider.enforcesHostToolExecution !== true
+		) {
+			throw new Error(
+				"Adapter cannot enforce host-only tool execution. Select an adapter with declared support.",
+			);
+		}
 		const maxTokens = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,

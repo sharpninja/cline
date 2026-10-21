@@ -1,6 +1,7 @@
 import type { ProviderSettingsManager } from "@cline/core";
 import { loginAndSaveProviderOAuthCredentials } from "@cline/core";
 import { getPersistedProviderApiKey } from "../commands/auth";
+import { assertDirectProvider } from "../utils/cloud-policy";
 import { writeDiagnostic } from "../utils/output";
 
 /**
@@ -10,8 +11,6 @@ import { writeDiagnostic } from "../utils/output";
  * `setSessionConfigOption`)
  */
 export const ACP_AUTH_METHODS = [
-	{ id: "cline", name: "Sign in with Cline" },
-	{ id: "cline-pass", name: "Sign in with ClinePass" },
 	{ id: "openai-codex", name: "Sign in with ChatGPT Subscription" },
 ] as const;
 
@@ -86,6 +85,7 @@ export async function authenticateAcpProvider(
 	methodId: AcpAuthMethodId,
 	providerSettingsManager: ProviderSettingsManager,
 ): Promise<AcpAuthResult> {
+	assertDirectProvider(methodId);
 	const existing = providerSettingsManager.getProviderSettings(methodId);
 
 	// Check for already-stored credentials.

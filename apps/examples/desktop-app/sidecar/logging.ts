@@ -5,17 +5,15 @@ import {
 	statSync,
 	truncateSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
-import {
-	type BasicLogger,
-	type RuntimeLoggerConfig,
-	resolveClineDataDir,
-} from "@cline/core";
+import { dirname } from "node:path";
+import { type BasicLogger, type RuntimeLoggerConfig } from "@cline/core";
 import pino, {
 	type DestinationStream,
 	type LevelWithSilent,
 	type Logger as PinoLogger,
 } from "pino";
+
+import { resolveDesktopLogPath } from "./paths";
 
 const LOG_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1_000;
 export const DESKTOP_LOG_MAX_BYTES = 50 * 1024 * 1024;
@@ -42,14 +40,12 @@ function resolveLogLevel(value: string | undefined): LevelWithSilent {
 }
 
 function resolveRuntimeConfig(): Required<RuntimeLoggerConfig> {
-	const enabledValue = process.env.CLINE_LOG_ENABLED?.trim().toLowerCase();
+	const enabledValue = process.env.CLINE_QB_LOG_ENABLED?.trim().toLowerCase();
 	return {
 		enabled: enabledValue !== "0" && enabledValue !== "false",
-		level: resolveLogLevel(process.env.CLINE_LOG_LEVEL),
-		destination:
-			process.env.CLINE_LOG_PATH?.trim() ||
-			join(resolveClineDataDir(), "logs", "code.log"),
-		name: process.env.CLINE_LOG_NAME?.trim() || "cline-code.sidecar",
+		level: resolveLogLevel(process.env.CLINE_QB_LOG_LEVEL),
+		destination: resolveDesktopLogPath(),
+		name: process.env.CLINE_QB_LOG_NAME?.trim() || "cline-qb.sidecar",
 		bindings: {},
 	};
 }

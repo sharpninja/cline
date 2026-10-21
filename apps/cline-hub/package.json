@@ -17,6 +17,7 @@
 	},
 	"dependencies": {
 		"@cline/core": "workspace:*",
+		"@cline/qbrain-governance": "workspace:*",
 		"@cline/llms": "workspace:*",
 		"@cline/shared": "workspace:*"
 	}

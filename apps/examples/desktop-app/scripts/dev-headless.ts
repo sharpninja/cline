@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
+import { DESKTOP_WEB_PORT } from "../desktop-endpoints";
 
 const approvalToken = randomUUID();
 const children: ReturnType<typeof Bun.spawn>[] = [];
@@ -45,12 +46,21 @@ async function main(): Promise<void> {
 	const sidecarPort = await reserveAvailablePort();
 	const endpoint = `ws://127.0.0.1:${sidecarPort}/transport?approval_token=${approvalToken}`;
 	const sidecar = spawn(["bun", "run", "sidecar/index.ts"], {
-		CLINE_SIDECAR_APPROVAL_TOKEN: approvalToken,
-		CLINE_SIDECAR_PORT: String(sidecarPort),
+		CLINE_QB_SIDECAR_APPROVAL_TOKEN: approvalToken,
+		CLINE_QB_SIDECAR_PORT: String(sidecarPort),
 	});
 	const web = spawn(
-		["bun", "run", "next", "dev", "webview", "-p", "3125", "--turbo"],
-		{ NEXT_PUBLIC_SIDECAR_WS_ENDPOINT: endpoint },
+		[
+			"bun",
+			"run",
+			"next",
+			"dev",
+			"webview",
+			"-p",
+			String(DESKTOP_WEB_PORT),
+			"--turbo",
+		],
+		{ NEXT_PUBLIC_CLINE_QB_SIDECAR_WS_ENDPOINT: endpoint },
 	);
 
 	const exitCode = await Promise.race([sidecar.exited, web.exited]);

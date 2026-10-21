@@ -1,20 +1,19 @@
 "use client";
 
+import { isClineCloudProvider } from "@cline/qbrain-governance/cloud-policy";
 import { AgentWelcomeHero, Button, IconButton } from "@cline/ui";
 import {
 	ArrowLeft,
-	Check,
 	CheckCircle2,
-	ChevronDown,
 	ExternalLink,
 	Import,
 	KeyRound,
 	Loader2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ClineLogo } from "@/components/cline-logo";
+
 import { ImportSessionsDialog } from "@/components/import-sessions-dialog";
-import { Badge } from "@/components/ui/badge";
+
 import { Input } from "@/components/ui/input";
 import {
 	Select,
@@ -23,22 +22,16 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { GitHubConnectStep } from "@/components/views/onboarding/onboarding-github-step";
-import { useAccount } from "@/contexts/account-context";
-import { OAUTH_MANAGED_PROVIDERS } from "@/hooks/chat-session/constants";
-import { isFeatureEnabled, useFeatureFlags } from "@/hooks/use-feature-flags";
-import { useOAuthUserCode } from "@/hooks/use-oauth-user-code";
-import { isClineAccountNotAuthenticatedResult } from "@/lib/cline-account-state";
+
+import { getProviderAuthKind } from "@/lib/provider-connection";
+
 import { desktopClient, openExternalUrl } from "@/lib/desktop-client";
 import {
 	readModelSelectionStorageFromWindow,
 	writeModelSelectionStorageToWindow,
 } from "@/lib/model-selection";
-import { OAUTH_LOGIN_TIMEOUT_MS } from "@/lib/provider-connection";
-import {
-	CLINE_DASHBOARD_URL,
-	getProviderApiKeyUrl,
-} from "@/lib/provider-key-urls";
+
+import { getProviderApiKeyUrl } from "@/lib/provider-key-urls";
 import {
 	fetchProviderCatalog,
 	invalidateProviderCatalogCache,
@@ -52,22 +45,6 @@ import {
 } from "@/lib/session-import";
 import { cn } from "@/lib/utils";
 
-const CREATE_ACCOUNT_URL = "https://app.cline.bot";
-const CLINE_PASS_SUBSCRIBE_URL =
-	"https://app.cline.bot/onboarding/individual-plan";
-
-const CLINE_SIGN_IN_BENEFITS = [
-	"Regular free model promotions",
-	"Subscribe to ClinePass for generous usage across the best open weights models like DeepSeek, Kimi, and GLM",
-	"No API key needed",
-];
-
-type ClineRecommendedModelsResponse = {
-	free?: { id: string; name?: string; description?: string }[];
-};
-
-export const GITHUB_ONBOARDING_FEATURE_FLAG = "code-onboarding-github";
-
 export type OnboardingStep =
 	| "welcome"
 	| "connect"
@@ -75,11 +52,8 @@ export type OnboardingStep =
 	| "import"
 	| "done";
 
-type OnboardingConnection =
-	| { kind: "cline" }
-	| { kind: "provider"; providerName: string };
-
-type SetupMethod = "cline" | "api-key";
+type OnboardingConnection = { kind: "provider"; providerName: string };
+type SetupMethod = "api-key";
 
 /**
  * Providers surfaced first in the bring-your-own-key picker. Everything else
@@ -99,7 +73,7 @@ const PREFERRED_PROVIDER_ORDER = [
 
 /**
  * True when entering an API key is all the provider needs: it declares an
- * API-key config field and nothing beyond key/base-URL. Providers with
+ * API-key config field and no other required configuration. Providers with
  * structured setup (Vertex `gcp.*`, Bedrock `aws.*`) or no API-key field at
  * all (Claude Code) would "connect" here without working, so they stay in
  * Settings where the full form lives. Missing metadata means the catalog
@@ -112,14 +86,18 @@ function isApiKeyOnlyProvider(provider: Provider): boolean {
 	}
 	return (
 		fields.some((field) => field.path === "apiKey") &&
-		fields.every((field) => field.path === "apiKey" || field.path === "baseUrl")
+		fields.every(
+			(field) =>
+				field.path === "apiKey" ||
+				(field.path === "baseUrl" && field.required !== true),
+		)
 	);
 }
 
 /**
  * Orders the provider catalog for the API-key setup step: OAuth-managed
- * providers (Cline itself, ClinePass, ChatGPT, OCA) are excluded because they
- * have dedicated sign-in paths, providers needing more than an API key are
+ * and local-auth providers use Settings. Cline account providers are excluded
+ * entirely. Providers needing more than an API key are
  * excluded because this form only collects one, popular API-key providers
  * come first, and the rest follow alphabetically.
  */
@@ -131,7 +109,8 @@ export function sortProvidersForApiKeySetup(providers: Provider[]): Provider[] {
 	return providers
 		.filter(
 			(provider) =>
-				!OAUTH_MANAGED_PROVIDERS.has(provider.id) &&
+				!isClineCloudProvider(provider.id) &&
+				getProviderAuthKind(provider) === "api-key" &&
 				isApiKeyOnlyProvider(provider),
 		)
 		.sort((a, b) => rank(a.id) - rank(b.id) || a.name.localeCompare(b.name));
@@ -335,135 +314,6 @@ function ConnectStep({
 	onConnected: (connection: OnboardingConnection) => void;
 	onSkip: () => void;
 }) {
-	const { user, refreshAccount } = useAccount();
-	const [signingIn, setSigningIn] = useState(false);
-	const deviceUserCode = useOAuthUserCode(signingIn);
-	const [signInError, setSignInError] = useState<string | null>(null);
-	const [clineApiKey, setClineApiKey] = useState("");
-	const [clineKeySaving, setClineKeySaving] = useState(false);
-	const [clineKeyError, setClineKeyError] = useState<string | null>(null);
-
-	// Increments whenever the user cancels a pending browser sign-in so a
-	// stale OAuth round-trip (which can dangle until the transport timeout)
-	// cannot advance or error the UI after the user has moved on.
-	const signInAttemptRef = useRef(0);
-
-	const signInWithCline = useCallback(async () => {
-		signInAttemptRef.current += 1;
-		const attempt = signInAttemptRef.current;
-		setSigningIn(true);
-		setSignInError(null);
-		try {
-			await desktopClient.invoke(
-				"run_provider_oauth_login",
-				{ provider: "cline" },
-				// The browser round-trip routinely outlives the default command
-				// deadline; the sidecar bounds the flow by device-code expiry.
-				{ timeoutMs: OAUTH_LOGIN_TIMEOUT_MS },
-			);
-			if (signInAttemptRef.current !== attempt) {
-				// The sign-in completed after the user cancelled but before the
-				// backend processed the cancellation, so credentials were saved.
-				// Refresh the account so the card reflects the real signed-in
-				// state instead of silently diverging from disk.
-				void refreshAccount();
-				return;
-			}
-			rememberProviderSelection({ id: "cline" });
-			await refreshAccount();
-			onConnected({ kind: "cline" });
-		} catch (error) {
-			if (signInAttemptRef.current !== attempt) {
-				return;
-			}
-			setSignInError(getErrorMessage(error));
-		} finally {
-			// The login may have persisted credentials; drop the short-lived
-			// catalog cache so the app reloads them instead of a pre-save copy.
-			invalidateProviderCatalogCache();
-			if (signInAttemptRef.current === attempt) {
-				setSigningIn(false);
-			}
-		}
-	}, [onConnected, refreshAccount]);
-
-	const cancelSignInWithCline = useCallback(() => {
-		signInAttemptRef.current += 1;
-		setSigningIn(false);
-		// Cancel the backend browser round-trip so a later-completed
-		// authorization in the abandoned tab can never persist credentials.
-		// Retry transient delivery failures; if the transport itself is gone,
-		// the sidecar cancels pending logins when the connection closes.
-		void (async () => {
-			for (let attempt = 0; attempt < 3; attempt++) {
-				try {
-					await desktopClient.invoke("cancel_provider_oauth_login", {
-						provider: "cline",
-					});
-					return;
-				} catch {
-					await new Promise((resolve) =>
-						setTimeout(resolve, 250 * (attempt + 1)),
-					);
-				}
-			}
-		})();
-	}, []);
-
-	const connectWithClineApiKey = useCallback(async () => {
-		const key = clineApiKey.trim();
-		if (!key) {
-			return;
-		}
-		setClineKeySaving(true);
-		setClineKeyError(null);
-		try {
-			await desktopClient.invoke("save_provider_settings", {
-				provider: "cline",
-				enabled: true,
-				api_key: key,
-			});
-			// Verify the key against the account API before advancing; the
-			// account context swallows errors, so an invalid key would
-			// otherwise onboard the user into a broken signed-in state.
-			try {
-				const verified = await desktopClient.invoke("cline_account", {
-					action: "clineAccount",
-					operation: "fetchMe",
-				});
-				// A typed not-authenticated result means the sidecar found no
-				// usable credential after the save — the key did not stick.
-				if (isClineAccountNotAuthenticatedResult(verified)) {
-					throw new Error("no Cline account credentials were found");
-				}
-			} catch (verifyError) {
-				// Roll back the persisted key so an unusable credential does
-				// not linger in provider settings.
-				await desktopClient
-					.invoke("save_provider_settings", {
-						provider: "cline",
-						api_key: "",
-					})
-					.catch(() => undefined);
-				throw new Error(
-					`the key could not be verified (${getErrorMessage(verifyError)})`,
-				);
-			}
-			rememberProviderSelection({ id: "cline" });
-			await refreshAccount();
-			onConnected({ kind: "cline" });
-		} catch (error) {
-			setClineKeyError(getErrorMessage(error));
-		} finally {
-			// Credentials may have been saved (or rolled back); drop the
-			// short-lived catalog cache so consumers reload the persisted state.
-			invalidateProviderCatalogCache();
-			setClineKeySaving(false);
-		}
-	}, [clineApiKey, onConnected, refreshAccount]);
-
-	const clineBusy = signingIn || clineKeySaving;
-
 	const [providers, setProviders] = useState<Provider[]>([]);
 	const [providersLoading, setProvidersLoading] = useState(true);
 	const [providersError, setProvidersError] = useState<string | null>(null);
@@ -536,9 +386,6 @@ function ConnectStep({
 		}
 	}, [apiKey, onConnected, selectedProvider, selectedProviderId]);
 
-	const [selectedMethod, setSelectedMethod] = useState<SetupMethod>("cline");
-	const [clineKeyFormExpanded, setClineKeyFormExpanded] = useState(false);
-
 	return (
 		<OnboardingContent surface="panel">
 			<div className="flex flex-col">
@@ -554,220 +401,28 @@ function ConnectStep({
 					<ArrowLeft className="size-4" />
 				</IconButton>
 				<h1 className="mt-6 text-2xl font-semibold tracking-tight text-foreground">
-					Set up Cline
+					Set up cline-qb
 				</h1>
 				<p className="mt-4 text-sm text-muted-foreground">
-					Choose how Cline connects to models. You can add more providers
-					anytime in Settings.
+					Choose a direct model provider. For local servers, browser sign-in, or
+					custom endpoints, skip this step and configure the provider in
+					Settings.
 				</p>
 			</div>
 
 			<div className="mt-8 flex flex-col gap-3">
 				<SetupOptionCard
-					id="cline"
-					onSelect={() => setSelectedMethod("cline")}
-					selectLabel="Sign in with Cline"
-					selected={selectedMethod === "cline"}
-				>
-					<SetupOptionHeader
-						accessory={
-							<Badge
-								className="-mt-2 rounded-sm border-primary/30 bg-primary/10 px-1.5 !pt-[0.3rem] !pb-[0.2rem] text-primary-emphasis"
-								variant="outline"
-							>
-								Recommended
-							</Badge>
-						}
-						description={
-							<ul className="flex flex-col gap-1">
-								{CLINE_SIGN_IN_BENEFITS.map((benefit) => (
-									<li className="flex gap-2" key={benefit}>
-										<Check
-											aria-hidden="true"
-											className="mt-0.5 size-3.5 shrink-0 text-primary"
-										/>
-										<span>{benefit}</span>
-									</li>
-								))}
-							</ul>
-						}
-						icon={<ClineLogo className="size-5" />}
-						title="Sign in with Cline"
-					/>
-					{user ? (
-						<div className="mt-6 flex flex-wrap items-center justify-end gap-6">
-							<p className="text-sm text-muted-foreground">
-								Signed in as{" "}
-								<span className="font-medium">
-									{user.displayName || user.email}
-								</span>
-							</p>
-							<Button
-								onClick={() => {
-									rememberProviderSelection({ id: "cline" });
-									onConnected({ kind: "cline" });
-								}}
-								size="md"
-								tone="accent"
-								type="button"
-								variant="fill"
-							>
-								Continue
-							</Button>
-						</div>
-					) : (
-						<div className="mt-8 ml-12 flex flex-wrap items-center gap-1 max-[720px]:ml-0">
-							<Button
-								disabled={clineBusy}
-								onClick={() => void signInWithCline()}
-								size="md"
-								tone="accent"
-								type="button"
-								variant="fill"
-							>
-								{signingIn && <Loader2 className="size-4 animate-spin" />}
-								{signingIn ? "Waiting for browser..." : "Sign in"}
-							</Button>
-							{signingIn ? (
-								<Button
-									onClick={cancelSignInWithCline}
-									size="md"
-									tone="neutral"
-									type="button"
-									variant="ghost"
-								>
-									Cancel
-								</Button>
-							) : (
-								<Button
-									onClick={() => void openExternalUrl(CREATE_ACCOUNT_URL)}
-									size="md"
-									tone="neutral"
-									type="button"
-									variant="ghost"
-								>
-									Sign up
-								</Button>
-							)}
-						</div>
-					)}
-					{!user && signingIn && deviceUserCode ? (
-						<p className="mt-4 ml-12 text-sm text-muted-foreground max-[720px]:ml-0">
-							Confirm this code in your browser:{" "}
-							<span className="font-mono font-medium text-foreground">
-								{deviceUserCode}
-							</span>
-						</p>
-					) : null}
-					{signInError ? (
-						<p
-							className="mt-6 ml-12 text-xs text-destructive max-[720px]:ml-0"
-							role="alert"
-						>
-							Sign in failed: {signInError}
-						</p>
-					) : null}
-					{!user ? (
-						<div className="mt-6 ml-10 -mb-2 max-[720px]:ml-0">
-							<Button
-								aria-controls="onboarding-cline-key-form"
-								aria-expanded={clineKeyFormExpanded}
-								disabled={clineBusy}
-								onClick={() => {
-									setSelectedMethod("cline");
-									setClineKeyFormExpanded(!clineKeyFormExpanded);
-								}}
-								size="xs"
-								tone="neutral"
-								type="button"
-								variant="ghost"
-							>
-								Use a Cline API key
-								<ChevronDown aria-hidden="true" className="size-3.5" />
-							</Button>
-							<ExpandablePanel
-								data-onboarding-cline-key-form
-								expanded={clineKeyFormExpanded}
-								id="onboarding-cline-key-form"
-							>
-								<div className="flex flex-col gap-2 pt-3 ml-2 max-[720px]:ml-0">
-									<div className="flex flex-wrap items-center gap-2">
-										<Input
-											aria-label="Cline API key"
-											autoComplete="off"
-											className="min-w-52 flex-1 bg-background"
-											disabled={clineKeySaving}
-											onChange={(event) => {
-												setClineApiKey(event.target.value);
-												setClineKeyError(null);
-											}}
-											onKeyDown={(event) => {
-												if (
-													event.key === "Enter" &&
-													clineApiKey.trim() &&
-													!clineKeySaving
-												) {
-													void connectWithClineApiKey();
-												}
-											}}
-											placeholder="Cline API key"
-											type="password"
-											value={clineApiKey}
-										/>
-										<Button
-											disabled={!clineApiKey.trim() || clineKeySaving}
-											onClick={() => void connectWithClineApiKey()}
-											size="md"
-											tone="accent"
-											type="button"
-											variant="fill"
-										>
-											{clineKeySaving ? (
-												<Loader2 className="size-4 animate-spin" />
-											) : null}
-											{clineKeySaving ? "Connecting..." : "Connect"}
-										</Button>
-									</div>
-									<Button
-										className="self-start -ml-1 mt-1"
-										disabled={clineKeySaving}
-										onClick={() => void openExternalUrl(CLINE_DASHBOARD_URL)}
-										size="xs"
-										tone="neutral"
-										type="button"
-										variant="ghost"
-									>
-										Find your key
-										<ExternalLink className="size-3" />
-									</Button>
-									{clineKeyError ? (
-										<p className="text-xs text-destructive" role="alert">
-											Failed to save API key: {clineKeyError}
-										</p>
-									) : null}
-								</div>
-							</ExpandablePanel>
-						</div>
-					) : null}
-				</SetupOptionCard>
-				<SetupOptionCard
 					id="api-key"
-					onSelect={() => {
-						setSelectedMethod("api-key");
-						setClineKeyFormExpanded(false);
-					}}
+					onSelect={() => {}}
 					selectLabel="Use your own API key"
-					selected={selectedMethod === "api-key"}
+					selected={true}
 				>
 					<SetupOptionHeader
 						description="Anthropic, OpenAI, OpenRouter, and more."
 						icon={<KeyRound className="size-4" />}
 						title="Use your own API key"
 					/>
-					<ExpandablePanel
-						data-onboarding-api-key-form
-						expanded={selectedMethod === "api-key"}
-					>
+					<ExpandablePanel data-onboarding-api-key-form expanded={true}>
 						<div className="flex flex-col gap-3 pt-6">
 							{providersError ? (
 								<p className="text-xs text-destructive" role="alert">
@@ -1022,80 +677,6 @@ function ImportHistoryStep({
 	);
 }
 
-/**
- * Shown after a Cline sign-in: the free models available right now (from the
- * same feed as the composer's Free tier, bundled fallback offline) and the
- * ClinePass upsell. The feed is display-only here; the user picks a model in
- * the composer.
- */
-function ClineModelsSummary() {
-	const [freeModels, setFreeModels] = useState<
-		NonNullable<ClineRecommendedModelsResponse["free"]>
-	>([]);
-
-	useEffect(() => {
-		let cancelled = false;
-		desktopClient
-			.invoke<ClineRecommendedModelsResponse>("list_cline_recommended_models")
-			.then((response) => {
-				if (!cancelled) {
-					setFreeModels(response?.free ?? []);
-				}
-			})
-			.catch(() => {
-				// The upsell still renders without the model list.
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, []);
-
-	return (
-		<div
-			className="mt-6 w-full rounded-xl border border-border bg-background p-5 text-left"
-			data-onboarding-cline-models
-		>
-			{freeModels.length > 0 ? (
-				<>
-					<h2 className="text-sm font-semibold text-foreground">Free models</h2>
-					<p className="mt-1 text-xs text-muted-foreground">
-						Try with limited usage at no cost.
-					</p>
-					<ul className="mt-3 flex flex-wrap gap-1.5">
-						{freeModels.map((model) => (
-							<li key={model.id}>
-								<Badge variant="outline">
-									{model.name?.trim() || model.id}
-								</Badge>
-							</li>
-						))}
-					</ul>
-					<div className="my-4 border-t border-border" />
-				</>
-			) : null}
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<div className="min-w-0 flex-1">
-					<h2 className="text-sm font-semibold text-foreground">ClinePass</h2>
-					<p className="mt-1 text-xs text-muted-foreground">
-						Generous usage across the best open weights models like DeepSeek,
-						Kimi, and GLM.
-					</p>
-				</div>
-				<Button
-					onClick={() => void openExternalUrl(CLINE_PASS_SUBSCRIBE_URL)}
-					size="sm"
-					tone="neutral"
-					type="button"
-					variant="surface"
-				>
-					Get ClinePass
-					<ExternalLink className="size-3.5" />
-				</Button>
-			</div>
-		</div>
-	);
-}
-
 function DoneStep({
 	connection,
 	onFinish,
@@ -1113,9 +694,9 @@ function DoneStep({
 				<p className="mt-3 text-md text-muted-foreground">
 					{connection?.kind === "provider"
 						? `${connection.providerName} is connected.`
-						: "Your Cline account is connected."}
+						: "Configure a direct provider in Settings before starting a task."}
 				</p>
-				{connection?.kind === "cline" ? <ClineModelsSummary /> : null}
+
 				<Button
 					className="mt-8 w-full max-w-64"
 					onClick={onFinish}
@@ -1138,14 +719,11 @@ export function OnboardingView({
 	onComplete: () => void;
 	initialStep?: OnboardingStep;
 }) {
-	const [step, setStep] = useState<OnboardingStep>(initialStep);
+	const [step, setStep] = useState<OnboardingStep>(
+		initialStep === "github" ? "connect" : initialStep,
+	);
 	const [connection, setConnection] = useState<OnboardingConnection | null>(
 		null,
-	);
-	const { flags } = useFeatureFlags();
-	const githubStepEnabled = isFeatureEnabled(
-		flags,
-		GITHUB_ONBOARDING_FEATURE_FLAG,
 	);
 
 	return (
@@ -1172,20 +750,10 @@ export function OnboardingView({
 						onBack={() => setStep("welcome")}
 						onConnected={(nextConnection) => {
 							setConnection(nextConnection);
-							// The GitHub integration lives on the Cline account, so the
-							// step only applies when one is connected
-							setStep(
-								nextConnection.kind === "cline" && githubStepEnabled
-									? "github"
-									: "import",
-							);
+							setStep("import");
 						}}
 						onSkip={onComplete}
 					/>
-				) : step === "github" ? (
-					<OnboardingContent surface="panel">
-						<GitHubConnectStep onContinue={() => setStep("import")} />
-					</OnboardingContent>
 				) : step === "import" ? (
 					<ImportHistoryStep
 						onContinue={() => setStep("done")}

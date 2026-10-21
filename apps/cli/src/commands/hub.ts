@@ -1,5 +1,4 @@
 import {
-	clearHubDiscovery,
 	ensureDetachedHubServer,
 	localHubHasNoActiveSessions,
 	probeHubServer,
@@ -7,7 +6,7 @@ import {
 	requestHubDrain,
 	resolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext,
-	stopLocalHubServerGracefully,
+	retireDiscoveredHub,
 } from "@cline/core";
 import { formatUptime, resolveClineBuildEnv } from "@cline/shared";
 import { Command, InvalidArgumentError } from "commander";
@@ -34,23 +33,16 @@ function addHubOptions(command: Command, defaultCwd?: string): Command {
 		.option("--pathname <path>", "Hub websocket path");
 }
 
-async function stopHubServer(_workspaceRoot: string): Promise<boolean> {
+async function stopHubServer(): Promise<boolean> {
 	const owner = resolveCliHubOwnerContext();
 	const discovery = await readHubDiscovery(owner.discoveryPath);
-	if (await stopLocalHubServerGracefully(owner)) {
-		await clearHubDiscovery(owner.discoveryPath);
-		return true;
+	if (!discovery?.url) return false;
+	if (!(await retireDiscoveredHub(discovery, owner.discoveryPath))) {
+		throw new Error(
+			"Hub retirement was not confirmed; discovery was preserved.",
+		);
 	}
-	const pid = discovery?.pid;
-	if (pid) {
-		try {
-			process.kill(pid, "SIGTERM");
-		} catch {
-			// best effort
-		}
-	}
-	await clearHubDiscovery(owner.discoveryPath);
-	return !!pid;
+	return true;
 }
 
 function formatHubUptimeFromStartedAt(
@@ -164,9 +156,8 @@ export function createHubCommand(
 	);
 
 	hub.command("stop").action(
-		action(async (options: Partial<HubOptions>) => {
-			const opts = resolveOptions(options);
-			const stopped = await stopHubServer(opts.cwd);
+		action(async () => {
+			const stopped = await stopHubServer();
 			io.writeln(JSON.stringify({ stopped }));
 		}),
 	);
@@ -227,7 +218,12 @@ export function createHubCommand(
 						discovery.url,
 						discovery.authToken,
 						"cline hub upgrade",
-					).catch(() => false);
+					);
+					if (!drained) {
+						throw new Error(
+							"Hub did not accept the drain; upgrade was refused.",
+						);
+					}
 					// An aborted upgrade must hand the hub back: leaving it
 					// draining refuses all new mutating work until a restart.
 					const undrain = async (): Promise<void> => {
@@ -249,7 +245,7 @@ export function createHubCommand(
 							idle = await localHubHasNoActiveSessions(
 								discovery.url,
 								discovery.authToken,
-							).catch(() => true);
+							).catch(() => false);
 							if (idle || Date.now() >= deadline) {
 								break;
 							}
@@ -263,7 +259,11 @@ export function createHubCommand(
 							fail();
 							return;
 						}
-						await stopHubServer(opts.cwd);
+						if (!(await retireDiscoveredHub(discovery, owner.discoveryPath))) {
+							throw new Error(
+								"Hub retirement was not confirmed; upgrade was refused.",
+							);
+						}
 					} catch (error) {
 						await undrain();
 						throw error;

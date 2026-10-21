@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveClineDir, validateStoragePath } from "@cline/shared/storage"
 import os from "os"
 import * as path from "path"
 
@@ -14,7 +15,7 @@ export type SkillsScanDirectory = {
 }
 
 function getClineHomePath(): string {
-	return path.join(os.homedir(), ".cline")
+	return getStorageNamespace() ? resolveClineDir() : path.join(os.homedir(), ".cline")
 }
 
 function getClineSkillsDirectoryPath(): string {
@@ -30,7 +31,7 @@ function getAgentSkillsDirectoryPath(): string {
  * Order is project directories first, then global directories.
  */
 export function getSkillsDirectoriesForScan(cwd: string): SkillsScanDirectory[] {
-	return [
+	const directories: SkillsScanDirectory[] = [
 		{ path: path.join(cwd, SKILL_DIRECTORY_NAMES.clineruleSkillsDir), source: "project" },
 		{ path: path.join(cwd, SKILL_DIRECTORY_NAMES.clineSkillsDir), source: "project" },
 		{ path: path.join(cwd, SKILL_DIRECTORY_NAMES.claudeSkillsDir), source: "project" },
@@ -38,4 +39,5 @@ export function getSkillsDirectoriesForScan(cwd: string): SkillsScanDirectory[] 
 		{ path: getClineSkillsDirectoryPath(), source: "global" },
 		{ path: getAgentSkillsDirectoryPath(), source: "global" },
 	]
+	return directories.map((entry) => ({ ...entry, path: validateStoragePath(entry.path) }))
 }

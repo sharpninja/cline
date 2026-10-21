@@ -24,15 +24,14 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 
-const SIDEBAR_COOKIE_NAME = "sidebar_state";
-const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
+const SIDEBAR_STATE_KEY = "cline-qb.sidebar_state";
 const SIDEBAR_WIDTH = 240;
 const SIDEBAR_WIDTH_MOBILE = "18rem";
 // macOS title-bar controls overlay the webview, so the collapsed rail only
 // needs to reserve enough width for its own controls.
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
-const SIDEBAR_WIDTH_COOKIE_NAME = "sidebar_width";
+const SIDEBAR_WIDTH_KEY = "cline-qb.sidebar_width";
 // Floor keeps session rows legible: below this the thread titles are fully
 // truncated away and row metadata (timestamps, pins) starts clipping.
 const SIDEBAR_MIN_WIDTH = 260;
@@ -42,53 +41,20 @@ function clampSidebarWidth(value: number): number {
 	return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
 }
 
-function setCookieValue(name: string, value: string | number | boolean): void {
-	const cookie = `${encodeURIComponent(name)}=${encodeURIComponent(
-		String(value),
-	)}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
-	const cookieStore = (
-		globalThis as {
-			cookieStore?: {
-				set(options: {
-					name: string;
-					value: string;
-					path: string;
-					expires: number;
-				}): Promise<void>;
-			};
-		}
-	).cookieStore;
-	if (cookieStore) {
-		void cookieStore.set({
-			name,
-			value: String(value),
-			path: "/",
-			expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
-		});
-		return;
+function setStoredValue(name: string, value: string | number | boolean): void {
+	try {
+		window.localStorage.setItem(name, String(value));
+	} catch {
+		/* Apply for this window when persistence is unavailable. */
 	}
-	const cookieSetter = Object.getOwnPropertyDescriptor(
-		Document.prototype,
-		"cookie",
-	)?.set;
-	cookieSetter?.call(document, cookie);
 }
-
-function getCookieValue(name: string): string | null {
-	if (typeof document === "undefined") {
+function getStoredValue(name: string): string | null {
+	try {
+		return window.localStorage.getItem(name);
+	} catch {
 		return null;
 	}
-	const encoded = `${encodeURIComponent(name)}=`;
-	const found = document.cookie
-		.split(";")
-		.map((part) => part.trim())
-		.find((part) => part.startsWith(encoded));
-	if (!found) {
-		return null;
-	}
-	return decodeURIComponent(found.slice(encoded.length));
 }
-
 type SidebarContextProps = {
 	state: "expanded" | "collapsed";
 	open: boolean;
@@ -130,11 +96,11 @@ function SidebarProvider({
 	const [desktopWidth, setDesktopWidthState] =
 		React.useState<number>(SIDEBAR_WIDTH);
 
-	// Read persisted width from cookie after hydration to avoid mismatch
+	// Read only this application namespace after hydration.
 	React.useEffect(() => {
-		const cookieValue = getCookieValue(SIDEBAR_WIDTH_COOKIE_NAME);
+		const cookieValue = getStoredValue(SIDEBAR_WIDTH_KEY);
 		const parsedWidth = Number(cookieValue);
-		if (Number.isFinite(parsedWidth)) {
+		if (cookieValue !== null && Number.isFinite(parsedWidth)) {
 			setDesktopWidthState(clampSidebarWidth(parsedWidth));
 		}
 	}, []);
@@ -152,7 +118,7 @@ function SidebarProvider({
 				_setOpen(openState);
 			}
 
-			setCookieValue(SIDEBAR_COOKIE_NAME, openState);
+			setStoredValue(SIDEBAR_STATE_KEY, openState);
 		},
 		[setOpenProp, open],
 	);
@@ -165,7 +131,7 @@ function SidebarProvider({
 	const setDesktopWidth = React.useCallback((width: number) => {
 		const next = clampSidebarWidth(width);
 		setDesktopWidthState(next);
-		setCookieValue(SIDEBAR_WIDTH_COOKIE_NAME, next);
+		setStoredValue(SIDEBAR_WIDTH_KEY, next);
 	}, []);
 
 	// Adds a keyboard shortcut to toggle the sidebar.

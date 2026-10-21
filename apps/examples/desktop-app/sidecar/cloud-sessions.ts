@@ -1,14 +1,12 @@
-import { ClineAccountService, ProviderSettingsManager } from "@cline/core";
+import { rejectClineAccount } from "@cline/qbrain-governance/cloud-policy";
 import {
 	type CloudCreationOptions,
-	CloudSessionApi,
+	isCloudOuterSessionId,
 	CloudSessionController,
 	type CloudSessionControllerOptions,
 	type CloudSessionEvent,
 	type CreateCloudSessionInput,
 } from "@cline/core/cloud";
-import { getClineEnvironmentConfig } from "@cline/shared";
-import { resolveFreshClineAuthToken } from "./cline-auth";
 import {
 	getEnvironmentContext,
 	getSidecarContextOwner,
@@ -210,59 +208,29 @@ export class CloudSessionManager extends CloudSessionController {
 		}
 	}
 }
-export function getCloudSessionManager(
+/** Pure classification: local session operations must not construct account clients. */
+export function isDesktopCloudSession(
 	ctx: SidecarContext,
-): CloudSessionManager {
-	ctx = getSidecarContextOwner(ctx);
-	const existing = ctx.cloudSessionManager;
-	if (existing instanceof CloudSessionManager) {
-		return existing;
-	}
-	const environment = getClineEnvironmentConfig();
-	const providerSettingsManager = new ProviderSettingsManager();
-	const getAuthToken = () =>
-		resolveFreshClineAuthToken(providerSettingsManager, ctx);
-	const api = new CloudSessionApi({
-		apiBaseUrl: environment.apiBaseUrl,
-		appBaseUrl: environment.appBaseUrl,
-		getAuthToken,
-	});
-	const accountService = new ClineAccountService({
-		apiBaseUrl: environment.apiBaseUrl,
-		getAuthToken,
-	});
-	// Cache successful org lookups across sidebar polls; never cache failures.
-	let activeOrgCache: { id: string | undefined; at: number } | undefined;
-	const getActiveOrganizationId = async (options?: {
-		fresh?: boolean;
-	}): Promise<string | undefined> => {
-		if (
-			!options?.fresh &&
-			activeOrgCache &&
-			Date.now() - activeOrgCache.at < 60_000
-		) {
-			return activeOrgCache.id;
-		}
-		if (!(await getAuthToken())?.trim()) {
-			return undefined;
-		}
-		const organizations = await accountService.fetchUserOrganizations();
-		const id = organizations?.find(
-			(organization) => organization.active,
-		)?.organizationId;
-		activeOrgCache = { id, at: Date.now() };
-		return id;
-	};
-	const manager = new CloudSessionManager(ctx, {
-		api,
-		apiBaseUrl: environment.apiBaseUrl,
-		getAuthToken,
-		getActiveOrganizationId,
-	});
-	ctx.cloudSessionManager = manager;
-	return manager;
+	sessionId: string,
+	environmentId?: string,
+): boolean {
+	const owner = getSidecarContextOwner(ctx);
+	// Explicit SSH selection owns its own ID namespace, even when local cloud state has the same ID.
+	if (environmentId && owner.runtimeBindings.get(environmentId)?.kind === "ssh")
+		return false;
+	return (
+		isCloudOuterSessionId(sessionId) ||
+		owner.liveSessions.get(sessionId)?.config.executionTarget === "cloud" ||
+		owner.cloudSessionManager?.isCloudSession(sessionId) === true
+	);
 }
 
+/** Reject cold and previously initialized managers before reading credentials or environment. */
+export function getCloudSessionManager(
+	_ctx: SidecarContext,
+): CloudSessionManager {
+	return rejectClineAccount();
+}
 export async function resetCloudSessionManager(
 	ctx: SidecarContext,
 ): Promise<void> {

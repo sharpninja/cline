@@ -1,14 +1,7 @@
 import {
 	addLocalProvider,
-	type ClineAccountActionRequest,
-	ClineAccountService,
 	ensureCustomProvidersLoaded,
-	executeClineAccountAction,
-	formatProviderOAuthApiKey,
 	getLocalProviderModels,
-	getPersistedProviderApiKey,
-	getProviderOAuthCredentialsFromSettings,
-	getValidClineCredentials,
 	listLocalProviders,
 	loginAndSaveLocalProviderOAuthCredentials,
 	markLocalProviderEnabled,
@@ -16,14 +9,15 @@ import {
 	type ProviderCapability,
 	type ProviderClient,
 	type ProviderProtocol,
-	type ProviderSettings,
 	readGlobalSettings,
-	saveLocalProviderOAuthCredentials,
 	saveLocalProviderSettings,
-	setAutoUpdateEnabledGlobally,
-	setTelemetryOptOutGlobally,
 } from "@cline/core";
-import { getClineEnvironmentConfig } from "@cline/shared";
+import {
+	isClineCloudProvider,
+	rejectClineAccount,
+	requireDirectProvider,
+} from "@cline/qbrain-governance/cloud-policy";
+
 import {
 	connectorChannelsPayload,
 	startConnectorChannel,
@@ -61,39 +55,6 @@ const ROUTINE_SCHEDULE_COMMANDS = new Set([
 	"delete_routine_schedule",
 ]);
 
-async function resolveHubClineAccountAuthToken(input: {
-	settings?: ProviderSettings;
-	apiBaseUrl: string;
-}): Promise<string | undefined> {
-	const credentials = input.settings
-		? getProviderOAuthCredentialsFromSettings("cline", input.settings)
-		: null;
-	if (!credentials || !input.settings) {
-		return getPersistedProviderApiKey("cline", input.settings);
-	}
-
-	const nextCredentials = await getValidClineCredentials(credentials, {
-		apiBaseUrl: input.apiBaseUrl,
-	});
-	if (!nextCredentials) {
-		throw new Error(
-			"Cline account requires re-authentication. Run cline auth cline.",
-		);
-	}
-
-	if (nextCredentials !== credentials) {
-		saveLocalProviderOAuthCredentials(
-			providerSettingsManager,
-			"cline",
-			input.settings,
-			nextCredentials,
-			{ setLastUsed: false },
-		);
-	}
-
-	return formatProviderOAuthApiKey("cline", nextCredentials);
-}
-
 export async function handleDesktopCommand(
 	ctx: HubContext,
 	command: string,
@@ -102,11 +63,11 @@ export async function handleDesktopCommand(
 	if (command === "list_provider_catalog") {
 		await ensureCustomProvidersLoaded(providerSettingsManager);
 		return await listLocalProviders(providerSettingsManager, {
-			isClinePassEnabled: true,
+			includeProvider: (id) => !isClineCloudProvider(id),
 		});
 	}
 	if (command === "list_provider_models") {
-		const provider = String(args?.provider ?? "").trim();
+		const provider = requireDirectProvider(String(args?.provider ?? ""));
 		return await getLocalProviderModels(
 			provider,
 			providerSettingsManager.getProviderConfig(provider, {
@@ -115,6 +76,7 @@ export async function handleDesktopCommand(
 		);
 	}
 	if (command === "save_provider_settings") {
+		requireDirectProvider(String(args?.provider ?? ""));
 		return saveLocalProviderSettings(providerSettingsManager, {
 			...readProviderSettingsUpdate(args),
 			providerId: String(args?.provider ?? ""),
@@ -124,6 +86,7 @@ export async function handleDesktopCommand(
 		});
 	}
 	if (command === "add_provider") {
+		requireDirectProvider(String(args?.provider_id ?? ""));
 		await ensureCustomProvidersLoaded(providerSettingsManager);
 		return await addLocalProvider(providerSettingsManager, {
 			providerId: String(args?.provider_id ?? ""),
@@ -161,7 +124,9 @@ export async function handleDesktopCommand(
 		});
 	}
 	if (command === "run_provider_oauth_login") {
-		const providerId = normalizeOAuthProvider(String(args?.provider ?? ""));
+		const providerId = normalizeOAuthProvider(
+			requireDirectProvider(String(args?.provider ?? "")),
+		);
 		const saved = await loginAndSaveLocalProviderOAuthCredentials(
 			providerSettingsManager,
 			providerId,
@@ -178,41 +143,22 @@ export async function handleDesktopCommand(
 		};
 	}
 	if (command === "cline_account") {
-		const settings = providerSettingsManager.getProviderSettings("cline");
-		const apiBaseUrl =
-			settings?.baseUrl?.trim() || getClineEnvironmentConfig().apiBaseUrl;
-		const authToken = await resolveHubClineAccountAuthToken({
-			settings,
-			apiBaseUrl,
-		});
-		if (!authToken) {
-			throw new Error("No Cline account auth token found");
-		}
-		const accountService = new ClineAccountService({
-			apiBaseUrl,
-			getAuthToken: async () => authToken,
-		});
-		return await executeClineAccountAction(
-			args as ClineAccountActionRequest,
-			accountService,
-		);
+		rejectClineAccount();
 	}
 	if (command === "get_global_settings") {
-		return readGlobalSettings();
+		return {
+			...readGlobalSettings(),
+			telemetryOptOut: true,
+			autoUpdateEnabled: false,
+		};
 	}
-	if (command === "set_telemetry_opt_out") {
-		if (typeof args?.telemetry_opt_out !== "boolean") {
-			throw new Error("telemetry_opt_out must be a boolean");
-		}
-		setTelemetryOptOutGlobally(args.telemetry_opt_out);
-		return readGlobalSettings();
-	}
-	if (command === "set_auto_update_enabled") {
-		if (typeof args?.auto_update_enabled !== "boolean") {
-			throw new Error("auto_update_enabled must be a boolean");
-		}
-		setAutoUpdateEnabledGlobally(args.auto_update_enabled);
-		return readGlobalSettings();
+	if (
+		command === "set_telemetry_opt_out" ||
+		command === "set_auto_update_enabled"
+	) {
+		throw new Error(
+			"Cline telemetry and upstream updates are unavailable in cline-qb.",
+		);
 	}
 	if (command === "list_connector_channels") {
 		return connectorChannelsPayload();

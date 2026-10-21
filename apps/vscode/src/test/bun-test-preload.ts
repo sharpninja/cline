@@ -26,21 +26,25 @@
 // additional names (e.g. `prepareRemoteConfigCoreIntegration`, `ClineCore`,
 // `createMcpTools`); a missing name is a hard "Export named 'X' not found" link
 // error. So we seed the mock namespace with every name the real @cline/core
-// exports (value `undefined`) and overlay the stub on top: stub names keep stub
-// behavior, every other valid import links as `undefined`.
+// exports and overlay the stub on top. Preserve values for exports the stub
+// does not replace: Bun can share re-export bindings with @cline/shared, so
+// replacing them with undefined also breaks real SDK executors used by tests.
 //
 // Importing the real package here is safe: the preload runs before any test
-// file, so this is the only point the real module is linked, and we only read
-// its export *names*, never its behavior (the mock shadows it everywhere tests look).
-import { beforeEach as bunBeforeEach, vi as bunVi, mock } from "bun:test"
+// file, so this is the point where unmocked exports can be captured. The
+// explicit test doubles below continue to replace host-dependent behavior.
+import { beforeEach as bunBeforeEach, vi as bunVi, expect as bunExpect, mock } from "bun:test"
+import { createRequire } from "node:module"
 import * as realClineCore from "@cline/core"
 import * as LlmsModels from "@cline/llms"
+import sinon from "sinon"
+import "./real-core-exports"
 import * as clineCoreStub from "./cline-core-vitest-stub"
 import * as vscodeStub from "./vscode-vitest-stub"
 
 const clineCoreNamespace: Record<string, unknown> = {}
 for (const name of Object.keys(realClineCore)) {
-	clineCoreNamespace[name] = undefined
+	clineCoreNamespace[name] = realClineCore[name as keyof typeof realClineCore]
 }
 Object.assign(clineCoreNamespace, clineCoreStub)
 
@@ -145,13 +149,14 @@ const actualNamespaceRegistry: Record<string, unknown> = {
 //          runs at module top level and tests only run after an await boundary,
 //          so the resolved registration is always in place before the first
 //          test executes.
+const requireOriginal = createRequire(import.meta.url)
 const resolveOriginalNamespace = (specifier: string): unknown => {
 	if (specifier in actualNamespaceRegistry) {
 		return actualNamespaceRegistry[specifier]
 	}
 	try {
 		// bun resolves `require` synchronously for both ESM and CJS workspace deps.
-		return (globalThis as { require?: (id: string) => unknown }).require?.(specifier)
+		return requireOriginal(specifier)
 	} catch {
 		return undefined
 	}
@@ -192,7 +197,90 @@ const viMock = (specifier: string, factory?: (importOriginal?: () => unknown) =>
 	return mock.module(specifier, () => result as object)
 }
 
+// Retain the pre-fixture value once, including the distinction between an
+// absent key and an empty string. Repeated stubs must not replace that baseline.
+const originalEnvironment = new Map<string, string | undefined>()
+const stubEnv = (name: string, value: string | boolean | undefined) => {
+	if (!originalEnvironment.has(name)) originalEnvironment.set(name, process.env[name])
+	if (value === undefined) delete process.env[name]
+	else process.env[name] = String(value)
+	return bunVi
+}
+const unstubAllEnvs = () => {
+	for (const [name, value] of originalEnvironment) {
+		if (value === undefined) delete process.env[name]
+		else process.env[name] = value
+	}
+	originalEnvironment.clear()
+	return bunVi
+}
+
+const originalGlobals = new Map<string, PropertyDescriptor | undefined>()
+const stubGlobal = (name: string, value: unknown) => {
+	if (!originalGlobals.has(name)) originalGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+	Object.defineProperty(globalThis, name, { value, configurable: true, writable: true, enumerable: true })
+	return bunVi
+}
+const unstubAllGlobals = () => {
+	for (const [name, descriptor] of originalGlobals) {
+		if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+		else Reflect.deleteProperty(globalThis, name)
+	}
+	originalGlobals.clear()
+	return bunVi
+}
+
+bunExpect.extend({
+	toHaveBeenCalledExactlyOnceWith(received: unknown, ...args: unknown[]) {
+		if (typeof received !== "function" || !("mock" in received)) throw new TypeError("Expected a mock function")
+		let pass = false
+		let failure = ""
+		try {
+			bunExpect(received).toHaveBeenCalledTimes(1)
+			bunExpect(received).toHaveBeenCalledWith(...args)
+			pass = true
+		} catch (error) {
+			failure = String(error)
+		}
+		return { pass, message: () => failure || "Expected the mock not to be called exactly once with these arguments" }
+	},
+})
+
+// Reuse the project's existing Sinon clock so asynchronous callbacks and
+// timers they schedule are drained in time order, not just one microtask turn.
+let fakeClock: ReturnType<typeof sinon.useFakeTimers> | undefined
 const viExtensions: Record<string, unknown> = {
+	useFakeTimers: (options?: Parameters<typeof sinon.useFakeTimers>[0]) => {
+		fakeClock ??= sinon.useFakeTimers(
+			options ?? {
+				toFake: [
+					"Date",
+					"setTimeout",
+					"clearTimeout",
+					"setInterval",
+					"clearInterval",
+					"setImmediate",
+					"clearImmediate",
+					"performance",
+				],
+			},
+		)
+		return bunVi
+	},
+	useRealTimers: () => {
+		fakeClock?.restore()
+		fakeClock = undefined
+		return bunVi
+	},
+	advanceTimersByTimeAsync: async (milliseconds: number) => {
+		if (!fakeClock) throw new Error("Fake timers are not enabled")
+		await fakeClock.tickAsync(milliseconds)
+		return bunVi
+	},
+	stubEnv,
+	unstubAllEnvs,
+	stubGlobal,
+	unstubAllGlobals,
 	mocked: (value: unknown) => value,
 	mock: viMock,
 	hoisted: <T>(factory: () => T): T => factory(),

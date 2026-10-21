@@ -2120,9 +2120,34 @@ export function withEmptyResponseRetry(
 
 function createAiSdkProvider(
 	defaultKind: ProviderModuleKind,
+	toolExecution: "host" | "provider" | "unknown",
 ): GatewayProviderFactory {
 	return async (config) => ({
+		enforcesHostToolExecution: toolExecution === "host",
 		async *stream(request, context) {
+			// Transport facts are declared by the adapter factory, not provider IDs.
+			// Refuse before loading an agent SDK that may spawn its own execution host.
+			if (
+				request.toolExecutionPolicy !== undefined &&
+				(request.toolExecutionPolicy !== "host-only" ||
+					toolExecution !== "host" ||
+					request.modelTools?.length)
+			) {
+				throw new Error(
+					"Adapter cannot enforce host-only tool execution. Internal or unknown tool execution is unsupported.",
+				);
+			}
+			if (
+				request.toolExecutionPolicy === "host-only" &&
+				(request.tools?.length ?? 0) > 0 &&
+				(usesImageGenerationOperation(context.model) ||
+					providerDisablesExternalToolExecution(context) ||
+					!modelSupportsToolCalling(context.model))
+			) {
+				throw new Error(
+					"Adapter cannot preserve required host tools for this model operation.",
+				);
+			}
 			// Multi-protocol HTTP gateways declare model adapters in models.dev.
 			// Keep native and local CLI transports authoritative for their models.
 			const kind = resolveModelProviderKind(defaultKind, context);
@@ -2468,18 +2493,32 @@ function resolveModelProviderKind(
 	}
 }
 
-export const createOpenAIProvider = createAiSdkProvider("openai");
-export const createClineProvider = createAiSdkProvider("cline");
-export const createOpenAICompatibleProvider =
-	createAiSdkProvider("openai-compatible");
-export const createAnthropicProvider = createAiSdkProvider("anthropic");
-export const createGoogleProvider = createAiSdkProvider("google");
-export const createVertexProvider = createAiSdkProvider("vertex");
-export const createBedrockProvider = createAiSdkProvider("bedrock");
-export const createMistralProvider = createAiSdkProvider("mistral");
-export const createClaudeCodeProvider = createAiSdkProvider("claude-code");
-export const createOpenAICodexProvider = createAiSdkProvider("openai-codex");
-export const createOpenCodeProvider = createAiSdkProvider("opencode");
-export const createDifyProvider = createAiSdkProvider("dify");
-export const createOllamaProvider = createAiSdkProvider("ollama");
-export const createSapAiCoreProvider = createAiSdkProvider("sapaicore");
+export const createOpenAIProvider = createAiSdkProvider("openai", "host");
+export const createClineProvider = createAiSdkProvider("cline", "host");
+export const createOpenAICompatibleProvider = createAiSdkProvider(
+	"openai-compatible",
+	"host",
+);
+export const createAnthropicProvider = createAiSdkProvider("anthropic", "host");
+export const createGoogleProvider = createAiSdkProvider("google", "host");
+export const createVertexProvider = createAiSdkProvider("vertex", "host");
+export const createBedrockProvider = createAiSdkProvider("bedrock", "host");
+export const createMistralProvider = createAiSdkProvider("mistral", "host");
+export const createClaudeCodeProvider = createAiSdkProvider(
+	"claude-code",
+	"provider",
+);
+export const createOpenAICodexProvider = createAiSdkProvider(
+	"openai-codex",
+	"provider",
+);
+export const createOpenCodeProvider = createAiSdkProvider(
+	"opencode",
+	"provider",
+);
+export const createDifyProvider = createAiSdkProvider("dify", "unknown");
+export const createOllamaProvider = createAiSdkProvider("ollama", "host");
+export const createSapAiCoreProvider = createAiSdkProvider(
+	"sapaicore",
+	"unknown",
+);

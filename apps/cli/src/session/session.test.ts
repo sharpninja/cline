@@ -116,10 +116,10 @@ describe("createCliCore", () => {
 				backendMode: expect.anything(),
 			}),
 		);
-		expect(featureFlagsPoll).toHaveBeenCalledTimes(1);
+		expect(featureFlagsPoll).not.toHaveBeenCalled();
 	});
 
-	it("returns the core while the feature flag refresh is still pending", async () => {
+	it("does not start a background feature-flag refresh", async () => {
 		let resolvePoll!: () => void;
 		featureFlagsPoll.mockReturnValueOnce(
 			new Promise<void>((resolve) => {
@@ -133,14 +133,14 @@ describe("createCliCore", () => {
 				new Promise<null>((resolve) => setImmediate(() => resolve(null))),
 			]);
 			expect(core).not.toBeNull();
-			expect(featureFlagsPoll).toHaveBeenCalledTimes(1);
+			expect(featureFlagsPoll).not.toHaveBeenCalled();
 		} finally {
 			resolvePoll();
 			await pendingCore;
 		}
 	});
 
-	it("logs a failed background feature flag refresh without failing startup", async () => {
+	it("does not invoke a hosted refresh even when it would fail", async () => {
 		const error = new Error("offline");
 		featureFlagsPoll.mockRejectedValueOnce(error);
 		const logger = { debug: vi.fn(), log: vi.fn(), error: vi.fn() };
@@ -148,12 +148,10 @@ describe("createCliCore", () => {
 		await expect(
 			sessionModule.createCliCore({ logger }),
 		).resolves.toBeDefined();
-		expect(logger.error).toHaveBeenCalledWith(
-			"Error polling CLI feature flags",
-			{
-				error,
-			},
-		);
+		expect(logger.error).not.toHaveBeenCalled();
+		expect(featureFlagsPoll).not.toHaveBeenCalled();
+		expect(createCore.mock.calls[0][0].prepare).toBeUndefined();
+		expect(createCore.mock.calls[0][0].messagesArtifactUploader).toBeUndefined();
 	});
 
 	it("forces the local backend when requested by the caller", async () => {

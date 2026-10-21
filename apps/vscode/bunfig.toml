@@ -5,3 +5,7 @@
 # their unit-test stubs (mirrors vitest.config.ts resolve.alias). See
 # src/test/bun-test-preload.ts for details.
 preload = ["./src/test/bun-test-preload.ts"]
+
+[run]
+shell = "bun"
+bun = false

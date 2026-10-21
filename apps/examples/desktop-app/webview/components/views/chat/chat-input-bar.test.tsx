@@ -94,7 +94,8 @@ vi.mock("@/lib/provider-model-catalog", () => ({
 	subscribeToProviderCatalogInvalidation:
 		subscribeToProviderCatalogInvalidationMock,
 	subscribeToProviderModels: subscribeToProviderModelsMock,
-	VOICE_INPUT_SETTINGS_CHANGED_EVENT: "cline:test-voice-input-settings-changed",
+	VOICE_INPUT_SETTINGS_CHANGED_EVENT:
+		"anthropic:test-voice-input-settings-changed",
 }));
 
 vi.mock("@/lib/streaming-transcription", () => ({
@@ -117,9 +118,9 @@ beforeEach(() => {
 	window.localStorage.removeItem(REASONING_SELECTION_STORAGE_KEY);
 	loadProviderModelCatalogMock.mockReset().mockResolvedValue({
 		providers: [],
-		enabledProviderIds: ["cline"],
-		providerModels: { cline: ["test-model"] },
-		providerReasoningModels: { cline: [] },
+		enabledProviderIds: ["anthropic"],
+		providerModels: { anthropic: ["test-model"] },
+		providerReasoningModels: { anthropic: [] },
 		voiceInput: null,
 	});
 	loadProviderModelsMock.mockReset().mockResolvedValue([]);
@@ -170,9 +171,9 @@ function providerCatalog(
 ) {
 	return {
 		providers: [],
-		enabledProviderIds: ["cline"],
-		providerModels: { cline: ["test-model"] },
-		providerReasoningModels: { cline: [] },
+		enabledProviderIds: ["anthropic"],
+		providerModels: { anthropic: ["test-model"] },
+		providerReasoningModels: { anthropic: [] },
 		voiceInput,
 	};
 }
@@ -197,6 +198,10 @@ async function renderVoiceComposer({
 	status = "idle",
 	readOnly = false,
 	executionTarget,
+	hasActiveSession = false,
+	repoUrl,
+	onProviderChange = vi.fn(),
+	onModelChange = vi.fn(),
 	onAttachFiles = vi.fn(),
 }: {
 	attachments?: Parameters<typeof ChatInputBar>[0]["attachments"];
@@ -210,6 +215,10 @@ async function renderVoiceComposer({
 	status?: ChatSessionStatus;
 	readOnly?: boolean;
 	executionTarget?: "cloud" | "local";
+	hasActiveSession?: boolean;
+	repoUrl?: string;
+	onProviderChange?: ReturnType<typeof vi.fn>;
+	onModelChange?: ReturnType<typeof vi.fn>;
 	onAttachFiles?: Parameters<typeof ChatInputBar>[0]["onAttachFiles"];
 } = {}) {
 	await act(async () => {
@@ -218,6 +227,8 @@ async function renderVoiceComposer({
 				<ChatInputBar
 					readOnly={readOnly}
 					executionTarget={executionTarget}
+					hasActiveSession={hasActiveSession}
+					repoUrl={repoUrl}
 					attachments={attachments}
 					gitBranch="main"
 					hasRunningAgents={hasRunningAgents}
@@ -231,9 +242,9 @@ async function renderVoiceComposer({
 						branches: ["main"],
 					}))}
 					onModeToggle={vi.fn()}
-					onModelChange={vi.fn()}
+					onModelChange={onModelChange}
 					onPromptInputChange={onPromptInputChange}
-					onProviderChange={vi.fn()}
+					onProviderChange={onProviderChange}
 					onReasoningChange={vi.fn()}
 					onRemoveAttachment={vi.fn()}
 					onRemovePromptInQueue={vi.fn()}
@@ -242,7 +253,7 @@ async function renderVoiceComposer({
 					onSwitchGitBranch={vi.fn(async () => true)}
 					promptDraft={{ version: promptVersion, value: prompt }}
 					promptsInQueue={[]}
-					provider="cline"
+					provider="anthropic"
 					reasoningEffort="low"
 					status={status}
 					summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -295,7 +306,7 @@ function DraftComposer({
 				onSwitchGitBranch={vi.fn(async () => true)}
 				promptDraft={promptDraft}
 				promptsInQueue={[]}
-				provider="cline"
+				provider="anthropic"
 				reasoningEffort="low"
 				status="idle"
 				summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -406,7 +417,7 @@ describe("ChatInputBar", () => {
 			model: "text-only",
 		});
 		await act(async () => {
-			subscribeToProviderModelsMock.mock.calls.at(-1)?.[0]("cline", [
+			subscribeToProviderModelsMock.mock.calls.at(-1)?.[0]("anthropic", [
 				{ id: "text-only", name: "Text only", inputModalities: ["text"] },
 			]);
 		});
@@ -512,7 +523,7 @@ describe("ChatInputBar", () => {
 		expect(onAbort).toHaveBeenCalledOnce();
 	});
 
-	it("filters unsupported cloud file selections while preserving local files", async () => {
+	it("blocks all Cloud attachment callbacks while preserving local files", async () => {
 		const cloudAttach = vi.fn();
 		await renderVoiceComposer({
 			executionTarget: "cloud",
@@ -531,9 +542,9 @@ describe("ChatInputBar", () => {
 		await act(async () =>
 			cloudInput?.dispatchEvent(new Event("change", { bubbles: true })),
 		);
-		expect(cloudAttach).toHaveBeenCalledWith([png, pngByExtension]);
+		expect(cloudAttach).not.toHaveBeenCalled();
 		expect(toastMock).toHaveBeenCalledWith(
-			expect.objectContaining({ title: "Unsupported cloud attachment" }),
+			expect.objectContaining({ title: "Cloud unavailable" }),
 		);
 		Object.defineProperty(cloudInput, "files", {
 			configurable: true,
@@ -542,7 +553,7 @@ describe("ChatInputBar", () => {
 		await act(async () =>
 			cloudInput?.dispatchEvent(new Event("change", { bubbles: true })),
 		);
-		expect(cloudAttach).toHaveBeenCalledTimes(1);
+		expect(cloudAttach).not.toHaveBeenCalled();
 
 		const localAttach = vi.fn();
 		await renderVoiceComposer({ onAttachFiles: localAttach });
@@ -558,21 +569,22 @@ describe("ChatInputBar", () => {
 		expect(localAttach).toHaveBeenCalledWith([text]);
 	});
 
-	it("blocks cloud images for a model without vision support", async () => {
+	it("blocks direct-provider images for a model without vision support", async () => {
 		const onAttachFiles = vi.fn();
 		loadProviderModelCatalogMock.mockResolvedValue({
 			...providerCatalog(null),
 			providerModelDetails: {
-				cline: [
+				anthropic: [
 					{ id: "test-model", name: "Text only", inputModalities: ["text"] },
 				],
 			},
 		});
-		await renderVoiceComposer({ executionTarget: "cloud", onAttachFiles });
+		loadProviderModelsMock.mockResolvedValue([
+			{ id: "test-model", name: "Text only", inputModalities: ["text"] },
+		]);
+		await renderVoiceComposer({ executionTarget: "local", onAttachFiles });
 		await vi.waitFor(() =>
-			expect(loadProviderModelCatalogMock).toHaveBeenCalledWith({
-				includeCloudModels: true,
-			}),
+			expect(loadProviderModelsMock).toHaveBeenCalledWith("anthropic"),
 		);
 		const input =
 			container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -587,7 +599,7 @@ describe("ChatInputBar", () => {
 				title: "This model doesn’t support image input",
 			}),
 		);
-		expect(toastMock.mock.calls.at(-1)?.[0]?.description).not.toContain(
+		expect(toastMock.mock.calls.at(-1)?.[0]?.description).toContain(
 			"Other files can still be attached",
 		);
 	});
@@ -676,291 +688,84 @@ describe("ChatInputBar", () => {
 		});
 	});
 
-	it("allows cloud image and model selection without replacing local defaults", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue({
-			providers: [],
-			enabledProviderIds: ["cline", "cline-pass", "cline-cloud"],
-			providerNames: {
-				cline: "Cline Usage-Billing",
-				"cline-pass": "ClinePass",
-				"cline-cloud": "ClineFree",
-			},
-			providerModels: {
-				"cline-pass": ["cline-pass/pass-model"],
-				"cline-cloud": ["cline-cloud/free-model"],
-				cline: ["cline-test", "cline-alt"],
-			},
-			providerReasoningModels: { anthropic: [], cline: [] },
-		});
-		const localSelection = {
+	it("qbrain Cloud exclusion preserves direct defaults across mount and catalog refresh", async () => {
+		const selection = JSON.stringify({
 			lastProvider: "anthropic",
-			lastModelByProvider: { anthropic: "claude-test" },
-		};
-		window.localStorage.setItem(
-			MODEL_SELECTION_STORAGE_KEY,
-			JSON.stringify(localSelection),
-		);
+			lastModelByProvider: { anthropic: "test-model" },
+		});
+		window.localStorage.setItem(MODEL_SELECTION_STORAGE_KEY, selection);
 		const onProviderChange = vi.fn();
 		const onModelChange = vi.fn();
+		await renderVoiceComposer({
+			executionTarget: "cloud",
+			hasActiveSession: true,
+			onProviderChange,
+			onModelChange,
+		});
 		await act(async () => {
-			root.render(
-				<WorkspaceProvider
-					value={{
-						workspaceRoot: "",
-						workspaces: [],
-						listWorkspaces: vi.fn(async () => []),
-						refreshWorkspaces: vi.fn(async () => undefined),
-						switchWorkspace: vi.fn(async () => true),
-						pickWorkspaceDirectory: vi.fn(async () => null),
-						selectChat: vi.fn(async () => true),
-					}}
-				>
-					<ChatInputBar
-						attachments={[]}
-						cloudBranch="feature/cloud"
-						environmentId="local"
-						executionTarget="cloud"
-						gitBranch="no-git"
-						hasActiveSession
-						mode="act"
-						model="claude-test"
-						onAbort={vi.fn()}
-						onAttachFiles={vi.fn()}
-						onEditPromptInQueue={vi.fn()}
-						onListGitBranches={vi.fn(async () => ({
-							current: "no-git",
-							branches: [],
-						}))}
-						onModeToggle={vi.fn()}
-						onModelChange={onModelChange}
-						onPromptInputChange={vi.fn()}
-						onProviderChange={onProviderChange}
-						onReasoningChange={vi.fn()}
-						onRemoveAttachment={vi.fn()}
-						onRemovePromptInQueue={vi.fn()}
-						onSend={vi.fn()}
-						onSteerPromptInQueue={vi.fn()}
-						onSwitchGitBranch={vi.fn(async () => false)}
-						promptDraft={{ version: 0, value: "" }}
-						promptsInQueue={[]}
-						provider="anthropic"
-						reasoningEffort="low"
-						repoUrl="https://github.com/cline/cline"
-						status="idle"
-						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
-						thinking
-						variant="conversation"
-					/>
-				</WorkspaceProvider>,
-			);
-			await Promise.resolve();
+			for (const [listener] of subscribeToProviderCatalogInvalidationMock.mock
+				.calls)
+				listener();
+			for (const [listener] of subscribeToProviderModelsMock.mock.calls)
+				listener("cline", [{ id: "hosted", name: "Hosted" }]);
 		});
-
-		await vi.waitFor(() => {
-			expect(onProviderChange).toHaveBeenCalledWith("cline");
-		});
-		const initialCatalogLoads = loadProviderModelCatalogMock.mock.calls.length;
-		const catalogInvalidated =
-			subscribeToProviderCatalogInvalidationMock.mock.calls[0]?.[0];
-		await act(async () => catalogInvalidated?.());
-		await vi.waitFor(() => {
-			expect(loadProviderModelCatalogMock).toHaveBeenCalledTimes(
-				initialCatalogLoads + 1,
-			);
-		});
-		expect(loadProviderModelCatalogMock).toHaveBeenCalledWith({
-			includeCloudModels: true,
-		});
-		expect(loadProviderModelsMock).not.toHaveBeenCalled();
-		const providerModelsListener =
-			subscribeToProviderModelsMock.mock.calls[0]?.[0];
-		await act(async () => {
-			providerModelsListener?.("cline", [
-				{ id: "local-only-model", name: "Local only" },
-			]);
-		});
+		expect(onProviderChange).not.toHaveBeenCalled();
 		expect(onModelChange).not.toHaveBeenCalled();
 		expect(
-			container.querySelector('[aria-label="Attach images"]'),
-		).not.toBeNull();
-		expect(
-			container.querySelector<HTMLInputElement>('input[type="file"]')?.accept,
-		).toBe("image/*");
-		expect(container.querySelector("#git-branch-btn")).toBeNull();
-		expect(container.textContent).toContain("cline/cline / feature/cloud");
-		expect(
-			container.querySelector<HTMLButtonElement>(
-				'[aria-label="Model and provider"]',
-			)?.disabled,
+			loadProviderModelCatalogMock.mock.calls.some(
+				([options]) => options?.includeCloudModels,
+			),
 		).toBe(false);
-		expect(
-			container.querySelector<HTMLButtonElement>(
-				'[aria-label="Thinking level"]',
-			)?.disabled,
-		).toBe(true);
-		const modelTrigger = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Model and provider"]',
-		);
-		await act(async () => modelTrigger?.click());
-		const cloudModel = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Model: claude-test"]',
-		);
-		loadProviderModelsMock.mockClear();
-		loadProviderModelCatalogMock.mockClear();
-		await act(async () => cloudModel?.click());
-		expect(loadProviderModelCatalogMock).toHaveBeenCalledWith({
-			includeCloudModels: true,
-		});
 		expect(loadProviderModelsMock).not.toHaveBeenCalled();
-		const alternateModel = Array.from(
-			container.querySelectorAll<HTMLButtonElement>(
-				".cline-ui-search-combobox__option",
-			),
-		).find((button) => button.textContent?.includes("cline-alt"));
-		expect(alternateModel).not.toBeUndefined();
-		expect(container.textContent).not.toContain("Local only");
-		await act(async () => alternateModel?.click());
-		expect(onModelChange).toHaveBeenCalledWith("cline-alt");
-		for (const [label, model] of [
-			["ClinePass", "cline-pass/pass-model"],
-			["ClineFree", "cline-cloud/free-model"],
-		]) {
-			await act(async () =>
-				container
-					.querySelector<HTMLButtonElement>(
-						'[aria-label="Provider: Cline Usage-Billing"]',
-					)
-					?.click(),
-			);
-			const option = [
-				...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-			].find((button) => button.textContent?.includes(label));
-			expect(option).toBeDefined();
-			await act(async () => option?.click());
-			expect(onModelChange).toHaveBeenLastCalledWith(model);
-		}
-		expect(
-			onProviderChange.mock.calls.every(([provider]) => provider === "cline"),
-		).toBe(true);
-		expect(
-			JSON.parse(
-				window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY) ?? "null",
-			),
-		).toEqual(localSelection);
+		expect(window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY)).toBe(
+			selection,
+		);
+		expect(container.textContent).toContain("Cline Cloud is unavailable");
 	});
 
-	it("blocks a new cloud message until its repository and cloud model catalog are ready", async () => {
+	it.each([
+		{ hasActiveSession: false, repoUrl: undefined },
+		{ hasActiveSession: false, repoUrl: "https://github.com/example/project" },
+		{ hasActiveSession: true, repoUrl: undefined },
+		{ hasActiveSession: true, repoUrl: "https://github.com/example/project" },
+	])("qbrain Cloud exclusion blocks Send and Enter without clearing draft: %j", async (state) => {
 		const onSend = vi.fn();
-		let catalogAvailable = false;
-		loadProviderModelCatalogMock.mockImplementation(async (options) => {
-			if (options?.includeCloudModels && !catalogAvailable)
-				throw new Error("offline");
-			return providerCatalog(null);
+		const onPromptInputChange = vi.fn();
+		await renderVoiceComposer({
+			...state,
+			executionTarget: "cloud",
+			prompt: "Keep this draft",
+			onSend,
+			onPromptInputChange,
 		});
-		const render = async (
-			repoUrl?: string,
-			prompt = "Continue in cloud",
-			attachments: Array<{ id: string; name: string; isImage: boolean }> = [],
-		) => {
-			await act(async () => {
-				root.render(
-					<WorkspaceProvider
-						value={{
-							workspaceRoot: "",
-							workspaces: [],
-							listWorkspaces: vi.fn(async () => []),
-							refreshWorkspaces: vi.fn(async () => undefined),
-							switchWorkspace: vi.fn(async () => true),
-							pickWorkspaceDirectory: vi.fn(async () => null),
-							selectChat: vi.fn(async () => true),
-						}}
-					>
-						<ChatInputBar
-							environmentId="local"
-							attachments={attachments}
-							executionTarget="cloud"
-							gitBranch="no-git"
-							hasActiveSession={false}
-							mode="act"
-							model="test-model"
-							onAbort={vi.fn()}
-							onAttachFiles={vi.fn()}
-							onEditPromptInQueue={vi.fn()}
-							onListGitBranches={vi.fn(async () => ({
-								current: "no-git",
-								branches: [],
-							}))}
-							onModeToggle={vi.fn()}
-							onModelChange={vi.fn()}
-							onPromptInputChange={vi.fn()}
-							onProviderChange={vi.fn()}
-							onReasoningChange={vi.fn()}
-							onRemoveAttachment={vi.fn()}
-							onRemovePromptInQueue={vi.fn()}
-							onSend={onSend}
-							onSteerPromptInQueue={vi.fn()}
-							onSwitchGitBranch={vi.fn(async () => false)}
-							promptDraft={{ version: 0, value: prompt }}
-							promptsInQueue={[]}
-							provider="cline"
-							reasoningEffort="low"
-							repoUrl={repoUrl}
-							status="idle"
-							summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
-							thinking
-						/>
-					</WorkspaceProvider>,
-				);
-				await Promise.resolve();
-			});
-		};
-
-		await render();
-		const sendButton = container.querySelector<HTMLButtonElement>(
+		const send = container.querySelector<HTMLButtonElement>(
 			'[aria-label="Send message"]',
 		);
-		const promptInput = container.querySelector<HTMLTextAreaElement>(
+		const input = container.querySelector<HTMLTextAreaElement>(
 			'textarea[role="combobox"]',
 		);
-		expect(sendButton?.disabled).toBe(true);
-		expect(sendButton?.title).toBe("Choose a repository");
-		expect(container.textContent).toContain("Repository required");
-		expect(promptInput?.placeholder).toBe("Choose a repository");
+		expect(send).not.toBeNull();
+		expect(input).not.toBeNull();
 		await act(async () => {
-			promptInput?.dispatchEvent(
+			send?.click();
+			input?.dispatchEvent(
 				new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
 			);
 		});
 		expect(onSend).not.toHaveBeenCalled();
-
-		await render("https://github.com/cline/cline");
-		expect(sendButton?.disabled).toBe(true);
-		await act(async () =>
-			promptInput?.dispatchEvent(
-				new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+		expect(send?.disabled).toBe(true);
+		expect(send?.title).toBe(
+			"Cline Cloud is unavailable. Select Local or an SSH host.",
+		);
+		expect(input?.value).toBe("Keep this draft");
+		expect(onPromptInputChange.mock.calls.some(([value]) => value === "")).toBe(
+			false,
+		);
+		expect(
+			loadProviderModelCatalogMock.mock.calls.some(
+				([options]) => options?.includeCloudModels,
 			),
-		);
-		expect(onSend).not.toHaveBeenCalled();
-		const retry = [...container.querySelectorAll("button")].find((button) =>
-			button.textContent?.includes("Retry"),
-		);
-		expect(retry).toBeDefined();
-		catalogAvailable = true;
-		await act(async () => retry?.click());
-		expect(sendButton?.disabled).toBe(false);
-		await act(async () => sendButton?.click());
-		expect(onSend).toHaveBeenCalledWith("Continue in cloud");
-
-		onSend.mockClear();
-		await render("https://github.com/cline/cline", "", [
-			{ id: "image-1", name: "image.png", isImage: true },
-		]);
-		const imageOnlySendButton = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Send message"]',
-		);
-		expect(imageOnlySendButton?.disabled).toBe(false);
-		await act(async () => imageOnlySendButton?.click());
-		expect(onSend).not.toHaveBeenCalled();
+		).toBe(false);
 	});
 
 	it("top-aligns the textarea in the taller welcome composer", async () => {
@@ -1001,7 +806,7 @@ describe("ChatInputBar", () => {
 						onSwitchGitBranch={vi.fn(async () => true)}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="idle"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -1308,7 +1113,7 @@ describe("ChatInputBar", () => {
 
 		await act(async () => {
 			window.dispatchEvent(
-				new Event("cline:test-voice-input-settings-changed"),
+				new Event("anthropic:test-voice-input-settings-changed"),
 			);
 		});
 		expect(loadProviderModelCatalogMock).toHaveBeenCalledTimes(3);
@@ -1394,7 +1199,7 @@ describe("ChatInputBar", () => {
 		);
 		await act(async () => {
 			window.dispatchEvent(
-				new Event("cline:test-voice-input-settings-changed"),
+				new Event("anthropic:test-voice-input-settings-changed"),
 			);
 		});
 		await vi.waitFor(() =>
@@ -1450,7 +1255,7 @@ describe("ChatInputBar", () => {
 							onRemovePromptInQueue={vi.fn()}
 							promptDraft={{ version: 0, value: "" }}
 							promptsInQueue={[]}
-							provider="cline"
+							provider="anthropic"
 							reasoningEffort="high"
 							status={status}
 							summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -1464,12 +1269,12 @@ describe("ChatInputBar", () => {
 
 		await render("idle");
 		await vi.waitFor(() => {
-			expect(loadProviderModelsMock).toHaveBeenCalledWith("cline");
+			expect(loadProviderModelsMock).toHaveBeenCalledWith("anthropic");
 		});
 		const providerModelsListener =
 			subscribeToProviderModelsMock.mock.calls[0]?.[0];
 		await act(async () => {
-			providerModelsListener?.("cline", [
+			providerModelsListener?.("anthropic", [
 				{ id: "test-model", name: "Refreshed model" },
 			]);
 		});
@@ -1595,9 +1400,9 @@ describe("ChatInputBar", () => {
 	it("selects High from the supported model thinking menu", async () => {
 		loadProviderModelCatalogMock.mockResolvedValue({
 			providers: [],
-			enabledProviderIds: ["cline"],
-			providerModels: { cline: ["test-model"] },
-			providerReasoningModels: { cline: ["test-model"] },
+			enabledProviderIds: ["anthropic"],
+			providerModels: { anthropic: ["test-model"] },
+			providerReasoningModels: { anthropic: ["test-model"] },
 		});
 		const onReasoningChange = vi.fn();
 		await act(async () => {
@@ -1638,7 +1443,7 @@ describe("ChatInputBar", () => {
 						onRemovePromptInQueue={vi.fn()}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="idle"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -1682,19 +1487,19 @@ describe("ChatInputBar", () => {
 			JSON.parse(
 				window.localStorage.getItem(REASONING_SELECTION_STORAGE_KEY) ?? "{}",
 			),
-		).toEqual({ cline: "high" });
+		).toEqual({ anthropic: "high" });
 	});
 
 	it("seeds an unset thinking level from the remembered provider choice instead of Low", async () => {
 		loadProviderModelCatalogMock.mockResolvedValue({
 			providers: [],
-			enabledProviderIds: ["cline"],
-			providerModels: { cline: ["test-model"] },
-			providerReasoningModels: { cline: ["test-model"] },
+			enabledProviderIds: ["anthropic"],
+			providerModels: { anthropic: ["test-model"] },
+			providerReasoningModels: { anthropic: ["test-model"] },
 		});
 		window.localStorage.setItem(
 			REASONING_SELECTION_STORAGE_KEY,
-			JSON.stringify({ cline: "medium", anthropic: "high" }),
+			JSON.stringify({ anthropic: "medium", openrouter: "high" }),
 		);
 		const onReasoningChange = vi.fn();
 		await act(async () => {
@@ -1725,7 +1530,7 @@ describe("ChatInputBar", () => {
 						onRemovePromptInQueue={vi.fn()}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort={undefined}
 						status="idle"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -1750,11 +1555,14 @@ describe("ChatInputBar", () => {
 	it("applies the new provider's remembered thinking level when switching providers", async () => {
 		loadProviderModelCatalogMock.mockResolvedValue({
 			providers: [],
-			enabledProviderIds: ["anthropic", "cline"],
-			providerModels: { anthropic: ["claude-test"], cline: ["test-model"] },
+			enabledProviderIds: ["anthropic", "openrouter"],
+			providerModels: {
+				anthropic: ["claude-test"],
+				openrouter: ["test-model"],
+			},
 			providerReasoningModels: {
 				anthropic: ["claude-test"],
-				cline: ["test-model"],
+				openrouter: ["test-model"],
 			},
 		});
 		window.localStorage.setItem(
@@ -1801,7 +1609,7 @@ describe("ChatInputBar", () => {
 				);
 			});
 
-		await renderBar("cline", "test-model");
+		await renderBar("openrouter", "test-model");
 		await vi.waitFor(() => {
 			expect(
 				container.querySelector<HTMLButtonElement>(
@@ -1881,7 +1689,7 @@ describe("ChatInputBar", () => {
 								steer: true,
 							},
 						]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="running"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -1919,9 +1727,9 @@ describe("ChatInputBar", () => {
 				}),
 			);
 		});
-		expect(onSteerPromptInQueue).toHaveBeenCalledExactlyOnceWith(
-			...(executionTarget === "cloud" ? ["queued-prompt-1"] : []),
-		);
+		if (executionTarget === "cloud")
+			expect(onSteerPromptInQueue).not.toHaveBeenCalled();
+		else expect(onSteerPromptInQueue).toHaveBeenCalledExactlyOnceWith();
 		onSteerPromptInQueue.mockClear();
 
 		const queueToggle = [
@@ -1960,9 +1768,15 @@ describe("ChatInputBar", () => {
 			await Promise.resolve();
 		});
 
-		expect(onSteerPromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
+		if (executionTarget === "cloud")
+			expect(onSteerPromptInQueue).not.toHaveBeenCalled();
+		else expect(onSteerPromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
 		await vi.waitFor(() =>
-			expect(queuedPrompts?.textContent).toContain("steer failed"),
+			expect(queuedPrompts?.textContent).toContain(
+				executionTarget === "cloud"
+					? "Cline Cloud is unavailable"
+					: "steer failed",
+			),
 		);
 
 		await act(async () => {
@@ -1981,13 +1795,20 @@ describe("ChatInputBar", () => {
 			await Promise.resolve();
 		});
 
-		expect(onEditPromptInQueue).toHaveBeenCalledWith(
-			"queued-prompt-1",
-			"What else can we update the title to?",
-		);
+		if (executionTarget === "cloud")
+			expect(onEditPromptInQueue).not.toHaveBeenCalled();
+		else
+			expect(onEditPromptInQueue).toHaveBeenCalledWith(
+				"queued-prompt-1",
+				"What else can we update the title to?",
+			);
 		await vi.waitFor(() => {
 			expect(editor?.isConnected).toBe(true);
-			expect(queuedPrompts?.textContent).toContain("edit failed");
+			expect(queuedPrompts?.textContent).toContain(
+				executionTarget === "cloud"
+					? "Cline Cloud is unavailable"
+					: "edit failed",
+			);
 		});
 
 		await act(async () => {
@@ -2005,7 +1826,13 @@ describe("ChatInputBar", () => {
 			await Promise.resolve();
 		});
 
-		expect(onRemovePromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
+		if (executionTarget === "cloud") {
+			expect(onRemovePromptInQueue).not.toHaveBeenCalled();
+			expect(queuedPrompts?.textContent).toContain(
+				"Cline Cloud is unavailable",
+			);
+		} else
+			expect(onRemovePromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
 	});
 
 	it("displays a queued team command as its slash form, not the runtime envelope", async () => {
@@ -2054,7 +1881,7 @@ describe("ChatInputBar", () => {
 								steer: false,
 							},
 						]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="running"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -2096,8 +1923,8 @@ describe("ChatInputBar", () => {
 		window.localStorage.setItem(
 			MODEL_SELECTION_STORAGE_KEY,
 			JSON.stringify({
-				lastProvider: "cline",
-				lastModelByProvider: { cline: "test-model" },
+				lastProvider: "anthropic",
+				lastModelByProvider: { anthropic: "test-model" },
 			}),
 		);
 		loadProviderModelCatalogMock.mockResolvedValue({
@@ -2170,8 +1997,8 @@ describe("ChatInputBar", () => {
 				window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY),
 			),
 		).toEqual({
-			lastProvider: "cline",
-			lastModelByProvider: { cline: "test-model" },
+			lastProvider: "anthropic",
+			lastModelByProvider: { anthropic: "test-model" },
 		});
 
 		// An explicit pick in the model dropdown DOES update the remembered
@@ -2190,7 +2017,7 @@ describe("ChatInputBar", () => {
 		).toEqual({
 			lastProvider: "openrouter",
 			lastModelByProvider: {
-				cline: "test-model",
+				anthropic: "test-model",
 				openrouter: "user-picked-model",
 			},
 		});
@@ -2198,121 +2025,16 @@ describe("ChatInputBar", () => {
 		window.localStorage.removeItem(MODEL_SELECTION_STORAGE_KEY);
 	});
 
-	it("renders the cline model picker with recommended and free sections", async () => {
-		loadProviderModelCatalogMock.mockResolvedValue({
-			providers: [],
-			enabledProviderIds: ["cline"],
-			providerModels: {
-				cline: [
-					"anthropic/claude-opus-5",
-					"deepseek/deepseek-v4-flash",
-					"zzz/other-model",
-				],
-			},
-			// Tier data arrives on the models themselves, stamped by the SDK.
-			providerModelDetails: {
-				cline: [
-					{
-						id: "anthropic/claude-opus-5",
-						name: "Claude Opus 5",
-						description: "Most intelligent model",
-						featured: { tier: "recommended", rank: 0, tags: ["NEW"] },
-					},
-					{
-						id: "deepseek/deepseek-v4-flash",
-						name: "DeepSeek V4 Flash",
-						description: "Fast and efficient",
-						featured: { tier: "free", rank: 0, tags: [] },
-					},
-					{ id: "zzz/other-model", name: "Other Model" },
-				],
-			},
-			providerNames: { cline: "Cline" },
-			providerReasoningModels: { cline: [] },
-		});
-
-		await act(async () => {
-			root.render(
-				<WorkspaceProvider value={workspaceValue}>
-					<ChatInputBar
-						attachments={[]}
-						gitBranch="main"
-						mode="act"
-						model="anthropic/claude-opus-5"
-						onAbort={vi.fn()}
-						onAttachFiles={vi.fn()}
-						onEditPromptInQueue={vi.fn()}
-						onListGitBranches={vi.fn(async () => ({
-							current: "main",
-							branches: ["main"],
-						}))}
-						onModeToggle={vi.fn()}
-						onModelChange={vi.fn()}
-						onPromptInputChange={vi.fn()}
-						onProviderChange={vi.fn()}
-						onReasoningChange={vi.fn()}
-						onRemoveAttachment={vi.fn()}
-						onRemovePromptInQueue={vi.fn()}
-						onSend={vi.fn()}
-						onSteerPromptInQueue={vi.fn()}
-						onSwitchGitBranch={vi.fn(async () => true)}
-						promptDraft={{ version: 0, value: "" }}
-						promptsInQueue={[]}
-						provider="cline"
-						reasoningEffort="low"
-						status="idle"
-						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
-						thinking={false}
-					/>
-				</WorkspaceProvider>,
-			);
-			await Promise.resolve();
-		});
-		// The provider trigger uses the catalog display name, the model
-		// trigger the model's display name.
-		const providerTrigger = container.querySelector<HTMLButtonElement>(
-			'[aria-label^="Provider:"]',
-		);
-		await vi.waitFor(() => {
-			expect(providerTrigger?.textContent).toContain("Cline");
-		});
-		const modelTrigger = container.querySelector<HTMLButtonElement>(
-			'[aria-label^="Model:"]',
-		);
-		expect(modelTrigger?.textContent).toContain("Claude Opus 5");
-		expect(loadProviderModelsMock).toHaveBeenCalledTimes(1);
-
-		await act(async () => modelTrigger?.click());
-		// Opening re-fetches so the tiers reflect the current feed.
-		expect(loadProviderModelsMock).toHaveBeenCalledTimes(2);
-		expect(loadProviderModelsMock).toHaveBeenLastCalledWith("cline");
-		const panel = document.querySelector('[role="dialog"]');
-		expect(panel?.textContent).toContain("Recommended");
-		expect(panel?.textContent).toContain("Free");
-		expect(panel?.textContent).toContain("All models");
-		expect(panel?.textContent).toContain("Most intelligent model");
-		expect(
-			panel?.querySelector(".cline-ui-search-combobox__badge")?.textContent,
-		).toBe("NEW");
-		// Featured entries lead; the rest of the catalog follows.
-		const optionLabels = [
-			...(panel?.querySelectorAll('[role="option"]') ?? []),
-		].map((option) => option.textContent);
-		expect(optionLabels[0]).toContain("Claude Opus 5");
-		expect(optionLabels[1]).toContain("DeepSeek V4 Flash");
-		expect(optionLabels[2]).toContain("Other Model");
-	});
-
 	it("opens model settings from the provider picker's set-up row", async () => {
 		loadProviderModelCatalogMock.mockResolvedValue({
 			providers: [],
-			enabledProviderIds: ["cline", "cline-pass"],
+			enabledProviderIds: ["anthropic", "openrouter"],
 			providerModels: {
-				cline: ["anthropic/claude-opus-5"],
-				"cline-pass": ["anthropic/claude-opus-5"],
+				anthropic: ["anthropic/claude-opus-5"],
+				openrouter: ["anthropic/claude-opus-5"],
 			},
 			providerModelDetails: {},
-			providerNames: { cline: "Cline", "cline-pass": "Cline Pass" },
+			providerNames: { anthropic: "Anthropic", openrouter: "OpenRouter" },
 			providerReasoningModels: {},
 		});
 		const onOpenModelSettings = vi.fn();
@@ -2346,7 +2068,7 @@ describe("ChatInputBar", () => {
 						onSwitchGitBranch={vi.fn(async () => true)}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="idle"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -2360,7 +2082,7 @@ describe("ChatInputBar", () => {
 			'[aria-label^="Provider:"]',
 		);
 		await vi.waitFor(() => {
-			expect(providerTrigger?.textContent).toContain("Cline");
+			expect(providerTrigger?.textContent).toContain("Anthropic");
 		});
 
 		await act(async () => providerTrigger?.click());
@@ -2369,8 +2091,8 @@ describe("ChatInputBar", () => {
 		// Both Cline entries list (one sign-in configures both); the set-up
 		// row trails the real providers.
 		expect(options.map((option) => option.textContent)).toEqual([
-			"Cline",
-			"Cline Pass",
+			"Anthropic",
+			"OpenRouter",
 			"Set up another provider",
 		]);
 
@@ -2378,11 +2100,11 @@ describe("ChatInputBar", () => {
 		expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
 		expect(onProviderChange).not.toHaveBeenCalled();
 		// The row is an action, not a selection: the trigger still shows Cline.
-		expect(providerTrigger?.textContent).toContain("Cline");
+		expect(providerTrigger?.textContent).toContain("Anthropic");
 		expect(document.querySelector('[role="dialog"]')).toBeNull();
 	});
 
-	describe("cline-pass picker offer", () => {
+	describe("direct-provider picker persistence", () => {
 		const renderComposer = async (props: {
 			executionTarget?: "cloud" | "local";
 			hasActiveSession?: boolean;
@@ -2442,17 +2164,17 @@ describe("ChatInputBar", () => {
 			// picker hides while the subscribed tier is non-empty.
 			loadProviderModelCatalogMock.mockResolvedValue({
 				providers: [],
-				enabledProviderIds: ["cline", "cline-pass"],
+				enabledProviderIds: ["anthropic", "openrouter"],
 				providerModels: {
-					cline: ["test-model"],
-					"cline-pass": [
+					anthropic: ["test-model"],
+					openrouter: [
 						"openai/gpt-5",
 						"google/gemini-flash",
 						"legacy/stale-model",
 					],
 				},
 				providerModelDetails: {
-					"cline-pass": [
+					openrouter: [
 						{
 							id: "openai/gpt-5",
 							name: "GPT-5",
@@ -2466,8 +2188,8 @@ describe("ChatInputBar", () => {
 						{ id: "legacy/stale-model", name: "Stale Legacy" },
 					],
 				},
-				providerNames: { cline: "Cline", "cline-pass": "ClinePass" },
-				providerReasoningModels: { cline: [], "cline-pass": [] },
+				providerNames: { anthropic: "Anthropic", openrouter: "OpenRouter" },
+				providerReasoningModels: { anthropic: [], openrouter: [] },
 			});
 		});
 
@@ -2475,6 +2197,105 @@ describe("ChatInputBar", () => {
 			window.localStorage.removeItem(MODEL_SELECTION_STORAGE_KEY);
 		});
 
+		it.each([
+			"",
+			"cline",
+			" CLINE-PASS ",
+			"retired-direct",
+		])("qbrain picker policy: never substitutes for selection %s", async (provider) => {
+			loadProviderModelCatalogMock.mockResolvedValue({
+				providers: [],
+				enabledProviderIds: ["cline", "cline-pass", "anthropic"],
+				providerModels: {
+					cline: ["blocked"],
+					"cline-pass": ["blocked"],
+					anthropic: ["direct-model"],
+				},
+				providerModelDetails: {},
+				providerNames: {
+					cline: "Cline",
+					"cline-pass": "ClinePass",
+					anthropic: "Anthropic",
+				},
+				providerReasoningModels: {},
+			});
+			const onProviderChange = vi.fn(),
+				onModelChange = vi.fn();
+			await renderComposer({
+				provider,
+				model: provider ? "selected-model" : "",
+				onProviderChange,
+				onModelChange,
+			});
+			expect(onProviderChange).not.toHaveBeenCalled();
+			expect(onModelChange).not.toHaveBeenCalled();
+			expect(
+				loadProviderModelsMock.mock.calls.some(([id]) =>
+					["cline", "cline-pass"].includes(id.trim().toLowerCase()),
+				),
+			).toBe(false);
+			await act(async () =>
+				container
+					.querySelector<HTMLButtonElement>('[aria-label^="Provider:"]')
+					?.click(),
+			);
+			const options = [...document.querySelectorAll('[role="option"]')].map(
+				(x) => x.textContent,
+			);
+			expect(options).not.toContain("Cline");
+			expect(options).not.toContain("ClinePass");
+		});
+		it("qbrain picker policy: ignores late excluded model publications", async () => {
+			loadProviderModelCatalogMock.mockResolvedValue({
+				providers: [],
+				enabledProviderIds: ["anthropic"],
+				providerModels: { anthropic: ["chosen"] },
+				providerModelDetails: {},
+				providerNames: { anthropic: "Anthropic" },
+				providerReasoningModels: {},
+			});
+			let publish!: (providerId: string, models: ProviderModel[]) => void;
+			subscribeToProviderModelsMock.mockImplementation((listener) => {
+				publish = listener;
+				return vi.fn();
+			});
+			const onProviderChange = vi.fn(),
+				onModelChange = vi.fn();
+			await renderComposer({
+				provider: "anthropic",
+				model: "chosen",
+				onProviderChange,
+				onModelChange,
+			});
+			await act(async () =>
+				publish("cline-pass", [{ id: "blocked", name: "Blocked model" }]),
+			);
+			await act(async () =>
+				container
+					.querySelector<HTMLButtonElement>('[aria-label^="Provider:"]')
+					?.click(),
+			);
+			expect(
+				[...document.querySelectorAll('[role="option"]')].some((x) =>
+					x.textContent?.includes("cline-pass"),
+				),
+			).toBe(false);
+			expect(onProviderChange).not.toHaveBeenCalled();
+			expect(onModelChange).not.toHaveBeenCalled();
+		});
+		it("qbrain picker policy: stale Cloud target cannot request hosted models", async () => {
+			await renderComposer({
+				provider: "cline",
+				model: "old",
+				executionTarget: "cloud",
+			});
+			expect(
+				loadProviderModelCatalogMock.mock.calls.some(
+					([options]) => options?.includeCloudModels,
+				),
+			).toBe(false);
+			expect(loadProviderModelsMock).not.toHaveBeenCalled();
+		});
 		const kimi: ProviderModel = {
 			id: "cline-pass/kimi-k3",
 			name: "Kimi K3",
@@ -2489,14 +2310,14 @@ describe("ChatInputBar", () => {
 		function mockBundledCatalog() {
 			loadProviderModelCatalogMock.mockResolvedValue({
 				providers: [],
-				enabledProviderIds: ["cline", "cline-pass"],
+				enabledProviderIds: ["anthropic", "openrouter"],
 				providerModels: {
-					cline: ["test-model"],
-					"cline-pass": [flash.id],
+					anthropic: ["test-model"],
+					openrouter: [flash.id],
 				},
-				providerModelDetails: { "cline-pass": [flash] },
-				providerNames: { cline: "Cline", "cline-pass": "ClinePass" },
-				providerReasoningModels: { cline: [], "cline-pass": [] },
+				providerModelDetails: { openrouter: [flash] },
+				providerNames: { anthropic: "Anthropic", openrouter: "OpenRouter" },
+				providerReasoningModels: { anthropic: [], openrouter: [] },
 			});
 		}
 
@@ -2506,8 +2327,8 @@ describe("ChatInputBar", () => {
 		])("preserves the saved model through a delayed live catalog %s", async (outcome) => {
 			mockBundledCatalog();
 			const selection = {
-				lastProvider: "cline-pass",
-				lastModelByProvider: { "cline-pass": kimi.id },
+				lastProvider: "openrouter",
+				lastModelByProvider: { openrouter: kimi.id },
 			};
 			window.localStorage.setItem(
 				MODEL_SELECTION_STORAGE_KEY,
@@ -2524,10 +2345,10 @@ describe("ChatInputBar", () => {
 			const onModelChange = vi.fn();
 			await renderComposer({
 				model: kimi.id,
-				provider: "cline-pass",
+				provider: "openrouter",
 				onModelChange,
 			});
-			expect(loadProviderModelsMock).toHaveBeenCalledWith("cline-pass");
+			expect(loadProviderModelsMock).toHaveBeenCalledWith("openrouter");
 			expect(onModelChange).not.toHaveBeenCalled();
 			expect(
 				container.querySelector('[aria-label^="Model:"]')?.textContent,
@@ -2551,7 +2372,7 @@ describe("ChatInputBar", () => {
 		it("keeps the live model name while the picker-open refresh is in flight", async () => {
 			mockBundledCatalog();
 			loadProviderModelsMock.mockResolvedValue([flash, kimi]);
-			await renderComposer({ model: kimi.id, provider: "cline-pass" });
+			await renderComposer({ model: kimi.id, provider: "openrouter" });
 			const modelTrigger = container.querySelector<HTMLButtonElement>(
 				'[aria-label^="Model:"]',
 			);
@@ -2570,7 +2391,7 @@ describe("ChatInputBar", () => {
 			// Only the live list is re-fetched; re-applying the bundled catalog
 			// (which lacks kimi) would flash the raw id in the trigger.
 			expect(modelTrigger?.textContent).toContain(kimi.name);
-			expect(loadProviderModelsMock).toHaveBeenLastCalledWith("cline-pass");
+			expect(loadProviderModelsMock).toHaveBeenLastCalledWith("openrouter");
 			expect(loadProviderModelCatalogMock).not.toHaveBeenCalled();
 			await act(async () => resolveModels([flash, kimi]));
 			expect(modelTrigger?.textContent).toContain(kimi.name);
@@ -2590,7 +2411,7 @@ describe("ChatInputBar", () => {
 			const onModelChange = vi.fn();
 			await renderComposer({
 				model: flash.id,
-				provider: "cline-pass",
+				provider: "openrouter",
 				onModelChange,
 			});
 			await act(async () =>
@@ -2606,7 +2427,7 @@ describe("ChatInputBar", () => {
 			expect(onModelChange).toHaveBeenCalledWith(kimi.id);
 			await renderComposer({
 				model: kimi.id,
-				provider: "cline-pass",
+				provider: "openrouter",
 				onModelChange,
 			});
 			onModelChange.mockClear();
@@ -2617,7 +2438,7 @@ describe("ChatInputBar", () => {
 				root = createRoot(container);
 				const initial = getInitialChatConfig();
 				expect(initial).toMatchObject({
-					provider: "cline-pass",
+					provider: "openrouter",
 					model: kimi.id,
 				});
 				let resolveModels!: (models: ProviderModel[]) => void;
@@ -2637,7 +2458,7 @@ describe("ChatInputBar", () => {
 				).toContain(kimi.id);
 				await act(async () => resolveModels([flash, kimi]));
 			} else {
-				await act(async () => publishModels("cline-pass", [flash]));
+				await act(async () => publishModels("openrouter", [flash]));
 			}
 			expect(onModelChange).not.toHaveBeenCalled();
 			expect(
@@ -2650,15 +2471,15 @@ describe("ChatInputBar", () => {
 			window.localStorage.setItem(
 				MODEL_SELECTION_STORAGE_KEY,
 				JSON.stringify({
-					lastProvider: "cline",
-					lastModelByProvider: { cline: "test-model", "cline-pass": kimi.id },
+					lastProvider: "anthropic",
+					lastModelByProvider: { anthropic: "test-model", openrouter: kimi.id },
 				}),
 			);
 			const onModelChange = vi.fn();
 			const onProviderChange = vi.fn();
 			await renderComposer({
 				model: "test-model",
-				provider: "cline",
+				provider: "anthropic",
 				onModelChange,
 				onProviderChange,
 			});
@@ -2669,47 +2490,47 @@ describe("ChatInputBar", () => {
 			);
 			const option = [
 				...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-			].find((entry) => entry.textContent?.includes("ClinePass"));
+			].find((entry) => entry.textContent?.includes("OpenRouter"));
 			expect(option).toBeTruthy();
 			await act(async () => option?.click());
-			expect(onProviderChange).toHaveBeenCalledWith("cline-pass");
+			expect(onProviderChange).toHaveBeenCalledWith("openrouter");
 			expect(onModelChange).toHaveBeenCalledWith(kimi.id);
 			expect(onModelChange).not.toHaveBeenCalledWith(flash.id);
 			expect(
 				parseModelSelectionStorage(
 					window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY),
-				).lastModelByProvider["cline-pass"],
+				).lastModelByProvider["openrouter"],
 			).toBe(kimi.id);
 		});
 
-		it("does not resurrect a stale remembered model the picker hides", async () => {
+		it("keeps an explicitly remembered direct model without replacement", async () => {
 			window.localStorage.setItem(
 				MODEL_SELECTION_STORAGE_KEY,
 				JSON.stringify({
-					lastProvider: "cline-pass",
-					lastModelByProvider: { "cline-pass": "legacy/stale-model" },
+					lastProvider: "openrouter",
+					lastModelByProvider: { openrouter: "legacy/stale-model" },
 				}),
 			);
 			const onModelChange = vi.fn();
 			await renderComposer({
 				model: "",
 				onModelChange,
-				provider: "cline-pass",
+				provider: "openrouter",
 			});
 
 			// The default selection must come from the visible offer, not the
 			// hidden remembered id.
 			await vi.waitFor(() => {
-				expect(onModelChange).toHaveBeenCalledWith("openai/gpt-5");
+				expect(onModelChange).toHaveBeenCalledWith("legacy/stale-model");
 			});
-			expect(onModelChange).not.toHaveBeenCalledWith("legacy/stale-model");
+			expect(onModelChange).not.toHaveBeenCalledWith("openai/gpt-5");
 
 			const modelTrigger = container.querySelector<HTMLButtonElement>(
 				'[aria-label^="Model:"]',
 			);
 			await act(async () => modelTrigger?.click());
 			const panel = document.querySelector('[role="dialog"]');
-			expect(panel?.textContent).not.toContain("Stale Legacy");
+			expect(panel?.textContent).toContain("Stale Legacy");
 			expect(panel?.textContent).not.toContain("Current model");
 		});
 
@@ -2718,17 +2539,17 @@ describe("ChatInputBar", () => {
 			window.localStorage.setItem(
 				MODEL_SELECTION_STORAGE_KEY,
 				JSON.stringify({
-					lastProvider: "cline",
-					lastModelByProvider: { cline: "test-model" },
+					lastProvider: "anthropic",
+					lastModelByProvider: { anthropic: "test-model" },
 				}),
 			);
 			const onModelChange = vi.fn();
 			await renderComposer({
 				model: "",
-				provider: "cline-pass",
+				provider: "openrouter",
 				onModelChange,
 			});
-			expect(onModelChange).toHaveBeenCalledWith(flash.id);
+			expect(onModelChange).not.toHaveBeenCalled();
 			expect(onModelChange).not.toHaveBeenCalledWith("test-model");
 		});
 
@@ -2737,7 +2558,7 @@ describe("ChatInputBar", () => {
 			await renderComposer({
 				model: "legacy/stale-model",
 				onModelChange,
-				provider: "cline-pass",
+				provider: "openrouter",
 			});
 
 			// The session's configured model stays active…
@@ -2753,7 +2574,7 @@ describe("ChatInputBar", () => {
 			// selecting a value that does not exist in the list.
 			await act(async () => modelTrigger?.click());
 			const panel = document.querySelector('[role="dialog"]');
-			expect(panel?.textContent).toContain("Current model");
+			expect(panel?.textContent).toContain("Stale Legacy");
 			const staleOption = [
 				...(panel?.querySelectorAll<HTMLButtonElement>('[role="option"]') ??
 					[]),
@@ -2761,35 +2582,14 @@ describe("ChatInputBar", () => {
 			expect(staleOption?.getAttribute("aria-selected")).toBe("true");
 		});
 
-		it("keeps an active model that is absent from the gated catalog", async () => {
-			const onModelChange = vi.fn();
-			await renderComposer({
-				executionTarget: "cloud",
-				hasActiveSession: true,
-				model: "cline-cloud/claude-sonnet-4.6",
-				onModelChange,
-				provider: "cline",
-			});
-
-			expect(onModelChange).not.toHaveBeenCalled();
-			const modelTrigger = container.querySelector<HTMLButtonElement>(
-				'[aria-label^="Model:"]',
-			);
-			await vi.waitFor(() => {
-				expect(modelTrigger?.textContent).toContain(
-					"cline-cloud/claude-sonnet-4.6",
-				);
-			});
-		});
-
-		it("falls back to a visible model when switching providers with a hidden remembered model", async () => {
+		it("restores the remembered direct model on explicit provider selection", async () => {
 			window.localStorage.setItem(
 				MODEL_SELECTION_STORAGE_KEY,
 				JSON.stringify({
-					lastProvider: "cline",
+					lastProvider: "anthropic",
 					lastModelByProvider: {
-						cline: "test-model",
-						"cline-pass": "legacy/stale-model",
+						anthropic: "test-model",
+						openrouter: "legacy/stale-model",
 					},
 				}),
 			);
@@ -2799,7 +2599,7 @@ describe("ChatInputBar", () => {
 				model: "test-model",
 				onModelChange,
 				onProviderChange,
-				provider: "cline",
+				provider: "anthropic",
 			});
 
 			const providerTrigger = container.querySelector<HTMLButtonElement>(
@@ -2810,22 +2610,22 @@ describe("ChatInputBar", () => {
 			const clinePassOption = [
 				...(panel?.querySelectorAll<HTMLButtonElement>('[role="option"]') ??
 					[]),
-			].find((option) => option.textContent?.includes("ClinePass"));
+			].find((option) => option.textContent?.includes("OpenRouter"));
 			await act(async () => clinePassOption?.click());
 
-			expect(onProviderChange).toHaveBeenCalledWith("cline-pass");
+			expect(onProviderChange).toHaveBeenCalledWith("openrouter");
 			// The hidden remembered model is not restored; the selection falls
 			// back to the offer and the remembered slot is repaired.
-			expect(onModelChange).toHaveBeenCalledWith("openai/gpt-5");
+			expect(onModelChange).toHaveBeenCalledWith("legacy/stale-model");
 			expect(
 				parseModelSelectionStorage(
 					window.localStorage.getItem(MODEL_SELECTION_STORAGE_KEY),
 				),
 			).toEqual({
-				lastProvider: "cline-pass",
+				lastProvider: "openrouter",
 				lastModelByProvider: {
-					cline: "test-model",
-					"cline-pass": "openai/gpt-5",
+					anthropic: "test-model",
+					openrouter: "legacy/stale-model",
 				},
 			});
 		});
@@ -2875,7 +2675,7 @@ describe("ChatInputBar", () => {
 						onSwitchGitBranch={vi.fn(async () => true)}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="idle"
 						summary={{ toolCalls: 0, tokensIn: 0, tokensOut: 0 }}
@@ -2904,7 +2704,7 @@ describe("ChatInputBar", () => {
 		};
 
 		await act(async () => {
-			subscribeToProviderModelsMock.mock.calls.at(-1)?.[0]("cline", [
+			subscribeToProviderModelsMock.mock.calls.at(-1)?.[0]("anthropic", [
 				{
 					id: "test-model",
 					name: "Test model",
@@ -3014,7 +2814,7 @@ describe("ChatInputBar token ring", () => {
 						onSwitchGitBranch={vi.fn(async () => true)}
 						promptDraft={{ version: 0, value: "" }}
 						promptsInQueue={[]}
-						provider="cline"
+						provider="anthropic"
 						reasoningEffort="low"
 						status="idle"
 						summary={summary}

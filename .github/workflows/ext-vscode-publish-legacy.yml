@@ -97,6 +97,7 @@ jobs:
                   npm run test:coverage
 
     publish:
+        if: github.repository == 'cline/cline'
         needs: test
         name: Publish Legacy Extension
         runs-on: ubuntu-latest

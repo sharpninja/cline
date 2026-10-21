@@ -1,15 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	clearLiveModelsCatalogCache,
 	resetClineRecommendedModelsCacheForTests,
 } from "@cline/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getCloudSessionManager } from "./cloud-sessions";
+import { CloudSessionManager } from "./cloud-sessions";
 import { handleCommand } from "./commands";
 import { createSidecarContext } from "./context";
-import { setCloudSessionsEnabled } from "./desktop-settings";
+import {
+	resolveDesktopSettingsPath,
+	setCloudSessionsEnabled,
+} from "./desktop-settings";
 import {
 	getDesktopFeatureFlagsService,
 	resetDesktopFeatureFlagsForTesting,
@@ -79,7 +82,7 @@ describe("desktop settings commands", () => {
 		"list_chat_sessions",
 		"list_discovered_sessions",
 		"search_sessions",
-	])("hides cloud rows from %s unless rollout and user toggle are enabled", async (command) => {
+	])("keeps cloud rows hidden from %s despite saved settings, cache and overrides", async (command) => {
 		const { ctx } = createContext();
 		for (const target of ["local", "cloud"] as const) {
 			ctx.liveSessions.set(target, {
@@ -95,8 +98,14 @@ describe("desktop settings commands", () => {
 		const cloudRows = [
 			{ sessionId: "cloud", origin: "cloud", prompt: "match" },
 		];
+		const retained = new CloudSessionManager(ctx, {
+			api: {} as never,
+			apiBaseUrl: "https://blocked.invalid",
+			getAuthToken: async () => "test-token",
+		});
+		ctx.cloudSessionManager = retained;
 		const discovery = vi
-			.spyOn(getCloudSessionManager(ctx), "listForDiscovery")
+			.spyOn(retained, "listForDiscovery")
 			.mockResolvedValue(cloudRows);
 		const flags = getDesktopFeatureFlagsService();
 		flags.hydrateCache({
@@ -115,64 +124,56 @@ describe("desktop settings commands", () => {
 
 		expect(await rows()).toEqual(["local"]);
 		expect(discovery).not.toHaveBeenCalled();
-		setCloudSessionsEnabled(true);
-		expect(await rows()).toEqual(["cloud", "local"]);
-		discovery.mockImplementationOnce(async () => {
-			setCloudSessionsEnabled(false);
-			return cloudRows;
-		});
-		expect(await rows()).toEqual(["local"]);
-		setCloudSessionsEnabled(true);
-		discovery.mockClear();
-		flags.hydrateCache({
-			userId: null,
-			updateTime: Date.now(),
-			flagsPayload: { featureFlags: { "code-cloud-agents": false } },
-		});
+		const path = resolveDesktopSettingsPath();
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, JSON.stringify({ cloudSessionsEnabled: true }));
+		process.env.CLINE_CODE_CLOUD_AGENTS = "1";
+		expect(() => setCloudSessionsEnabled(true)).toThrow(
+			/Cline account services are unavailable/,
+		);
 		expect(await rows()).toEqual(["local"]);
 		expect(discovery).not.toHaveBeenCalled();
 		expect(ctx.liveSessions.has("cloud")).toBe(true);
 	});
 
-	it("loads cloud-only models only for an enabled cloud picker", async () => {
+	it.each([
+		"list_provider_models",
+		"list_transcription_models",
+		"list_cline_recommended_models",
+	])("rejects hosted catalog command %s before fetch", async (command) => {
 		const { ctx } = createContext();
-		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			if (String(input) === "https://models.dev/api.json") {
-				return new Response(JSON.stringify({}), { status: 200 });
-			}
-			return new Response(
-				JSON.stringify({
-					clineCloud: [
-						{
-							id: "cline-cloud/cloud-only",
-							name: "Cloud Only",
-						},
-					],
-				}),
-				{ status: 200 },
-			);
-		});
+		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
-
-		process.env.CLINE_CODE_CLOUD_AGENTS = "0";
-		const local = (await handleCommand(ctx, "list_provider_models", {
-			provider: "cline",
-			includeCloudModels: true,
-		})) as { models: Array<{ id: string }> };
-		expect(
-			local.models.some((model) => model.id.startsWith("cline-cloud/")),
-		).toBe(false);
-
-		process.env.CLINE_CODE_CLOUD_AGENTS = "1";
-		const cloud = (await handleCommand(ctx, "list_provider_models", {
-			provider: "cline",
-			includeCloudModels: true,
-		})) as { models: Array<{ id: string }> };
-		expect(cloud.models).toContainEqual(
-			expect.objectContaining({ id: "cline-cloud/cloud-only" }),
-		);
+		for (const provider of ["cline", "cline-pass", " CLINE "]) {
+			process.env.CLINE_CODE_CLOUD_AGENTS = "1";
+			await expect(
+				handleCommand(ctx, command, { provider, includeCloudModels: true }),
+			).rejects.toThrow(/Cline account services are unavailable/);
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
-
+	it("lists direct providers without hosted providers or an account lookup", async () => {
+		const { ctx } = createContext();
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const result = (await handleCommand(ctx, "list_provider_catalog", {})) as {
+			providers: Array<{ id: string }>;
+		};
+		expect(result.providers.some((p) => p.id === "openai-codex")).toBe(true);
+		expect(
+			result.providers.some((p) => p.id === "cline" || p.id === "cline-pass"),
+		).toBe(false);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+	it("rejects cloud enablement without broadcasting a successful settings change", async () => {
+		const { ctx, events } = createContext();
+		await expect(
+			handleCommand(ctx, "set_cloud_sessions_enabled", {
+				cloud_sessions_enabled: true,
+			}),
+		).rejects.toThrow(/Cline account services are unavailable/);
+		expect(events).toEqual([]);
+	});
 	it("rejects a non-boolean cloud sessions toggle value", async () => {
 		const { ctx, events } = createContext();
 
@@ -184,10 +185,8 @@ describe("desktop settings commands", () => {
 		expect(events).toEqual([]);
 	});
 
-	it.each([
-		true,
-		false,
-	])("persists toggle %s and refreshes cloud history immediately", async (enabled) => {
+	it("reports cloud disabled and refreshes the client without enabling execution", async () => {
+		const enabled = false;
 		const { ctx, events } = createContext();
 
 		await expect(

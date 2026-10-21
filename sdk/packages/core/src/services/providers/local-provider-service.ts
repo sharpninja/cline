@@ -66,6 +66,8 @@ const CLINE_PROVIDER_ID = "cline";
 const CLINE_PASS_PROVIDER_ID = "cline-pass";
 
 export interface ListLocalProvidersOptions {
+	/** Select providers before resolving their models or credentials. Omitted includes all. */
+	includeProvider?: (providerId: string) => boolean;
 	isClinePassEnabled?: boolean;
 }
 
@@ -956,7 +958,9 @@ export async function listLocalProviders(
 	voiceInput?: VoiceInputSelection;
 }> {
 	const state = manager.read();
-	const ids = LlmsModels.getProviderIds();
+	const ids = LlmsModels.getProviderIds().filter(
+		(id) => options.includeProvider?.(id) ?? true,
+	);
 
 	// The catalog is built for every provider at startup and must not wait on
 	// the network, so featured tiers come from a synchronous peek (cached live

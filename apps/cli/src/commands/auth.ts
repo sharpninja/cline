@@ -12,6 +12,11 @@ import {
 import { Command } from "commander";
 import React from "react";
 import { disableOpenTuiGraphicsProbe } from "../tui/opentui-env";
+import {
+	assertDirectProvider,
+	CLINE_ACCOUNT_DISABLED_MESSAGE,
+	isClineCloudProvider,
+} from "../utils/cloud-policy";
 import open from "../utils/open";
 import {
 	getPersistedProviderApiKey,
@@ -245,6 +250,7 @@ export function saveOAuthProviderSettings(
 	existing: ProviderSettings | undefined,
 	credentials: OAuthCredentials,
 ): ProviderSettings {
+	assertDirectProvider(providerId);
 	return saveProviderOAuthCredentials({
 		manager: providerSettingsManager,
 		providerId,
@@ -263,6 +269,7 @@ export async function ensureOAuthProviderApiKey(input: {
 	apiKey?: string;
 	selectedProviderSettings?: ProviderSettings;
 }> {
+	assertDirectProvider(input.providerId);
 	if (input.currentApiKey || !isOAuthProvider(input.providerId)) {
 		return {
 			apiKey: input.currentApiKey,
@@ -389,6 +396,10 @@ async function runInteractiveAuthTui(input: AuthCommandInput): Promise<number> {
 }
 
 export async function runAuthCommand(input: AuthCommandInput): Promise<number> {
+	if (input.explicitProvider && isClineCloudProvider(input.explicitProvider)) {
+		input.io.writeErr(CLINE_ACCOUNT_DISABLED_MESSAGE);
+		return 1;
+	}
 	const hasQuickSetupFlags =
 		typeof input.apikey === "string" ||
 		typeof input.modelid === "string" ||
@@ -428,9 +439,13 @@ export async function runAuthProviderCommand(
 	providerId: string,
 	io: AuthIo,
 ): Promise<number> {
+	if (isClineCloudProvider(providerId)) {
+		io.writeErr(CLINE_ACCOUNT_DISABLED_MESSAGE);
+		return 1;
+	}
 	if (!isOAuthProvider(providerId)) {
 		io.writeErr(
-			`provider "${providerId}" does not support OAuth login (supported: cline, openai-codex, oca)`,
+			`provider "${providerId}" does not support OAuth login (supported: openai-codex, oca)`,
 		);
 		return 1;
 	}

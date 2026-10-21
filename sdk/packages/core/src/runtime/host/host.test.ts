@@ -321,6 +321,24 @@ describe("runtime host resolution", () => {
 		expect(host).toBeInstanceOf(RemoteRuntimeHost);
 	});
 
+	it.each([
+		"auto",
+		"hub",
+		"remote",
+	] as const)("refuses local runtime policy before routing to %s", async (backendMode) => {
+		const { createRuntimeHost } = await import("./host");
+		await expect(
+			createRuntimeHost({
+				backendMode,
+				configureAgentRuntime: (config) => config,
+				remote: { endpoint: "https://remote.example.com/hub" },
+			}),
+		).rejects.toThrow("Host runtime configuration requires local execution");
+		expect(hubConnectMock).not.toHaveBeenCalled();
+		expect(ensureCompatibleLocalHubUrlMock).not.toHaveBeenCalled();
+		expect(resolveCompatibleLocalHubUrlMock).not.toHaveBeenCalled();
+		expect(prewarmDetachedHubServerMock).not.toHaveBeenCalled();
+	});
 	it("requires a remote endpoint when backendMode is remote", async () => {
 		const { createRuntimeHost } = await import("./host");
 

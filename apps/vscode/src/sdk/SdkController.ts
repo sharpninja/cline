@@ -22,6 +22,7 @@ import {
 	setTelemetryOptOutGlobally,
 	type UserInstructionConfigService,
 } from "@cline/core"
+import { ClineCloudDisabledError } from "@cline/qbrain-governance/cloud-policy"
 import { formatDisplayUserInput, type RemoteConfig, type RemoteConfigBundle } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import type { ChatContent } from "@shared/ChatContent"
@@ -111,7 +112,7 @@ import { createWorkspaceFileReadExecutor } from "./vscode-file-read-executor"
 import { VscodeSessionHost } from "./vscode-session-host"
 import type { VscodeTerminalExecutionMode } from "./vscode-terminal-execution-mode"
 import { WebviewGrpcBridge } from "./webview-grpc-bridge"
-import { resolveWorkspaceManagerPaths, resolveWorkspaceRootPath } from "./workspace-root"
+import { resolveWorkspaceManagerPaths } from "./workspace-root"
 
 /**
  * Log a stub warning and return undefined.
@@ -247,11 +248,9 @@ export class Controller {
 	private pendingClineAuthRetry?: ClineAuthRetry
 	checkpointRestoreInput?: ExtensionState["checkpointRestoreInput"]
 
-	// Timer for periodic remote config fetching (enterprise policy enforcement)
-	private remoteConfigTimer?: NodeJS.Timeout
+	// Compatibility state for retiring legacy hosted policy.
 	private remoteConfigCoreIntegration?: PreparedRemoteConfigCoreIntegration
 	private remoteConfigRevision = 0
-	private remoteConfigAvailable = false
 	private readonly remoteConfigRefreshCoordinator = new RemoteConfigRefreshCoordinator<boolean>((isCurrent) =>
 		this.performRemoteConfigRefresh(isCurrent),
 	)
@@ -286,7 +285,7 @@ export class Controller {
 	}
 
 	get isRemoteConfigAvailable(): boolean {
-		return this.remoteConfigAvailable
+		return false
 	}
 
 	get currentRemoteConfigRevision(): number {
@@ -692,10 +691,7 @@ export class Controller {
 		// Register the bridge as a session event listener
 		this.onSessionEvent(this.grpcBridge.createListener())
 
-		// Restore auth state from secrets on startup, then start the remote
-		// config polling timer (enterprise policy enforcement). The timer must
-		// start after auth is restored so remote config can identify the user's
-		// organization and apply org-level policies.
+		// Publish signed-out state and retire legacy runtime policy before local work.
 		this.authService
 			.restoreRefreshTokenAndRetrieveAuthInfo()
 			.then(async () => {
@@ -704,7 +700,6 @@ export class Controller {
 				} catch (err) {
 					Logger.error("[SdkController] Initial remote config refresh failed:", err)
 				}
-				this.startRemoteConfigTimer()
 			})
 			.catch((err) => {
 				Logger.error("[SdkController] Failed to restore auth state:", err)
@@ -791,18 +786,6 @@ export class Controller {
 		})
 	}
 
-	/**
-	 * Starts the periodic remote config fetching timer. Fetches immediately
-	 * and then every hour, to enforce enterprise policy (provider lockdown,
-	 * MCP server management, OpenTelemetry, etc.).
-	 */
-	private startRemoteConfigTimer(): void {
-		// Set up 1-hour interval
-		this.remoteConfigTimer = setInterval(() => {
-			this.refreshRemoteConfig().catch((err) => Logger.error("[SdkController] Remote config timer failed:", err))
-		}, 3600000) // 1 hour
-	}
-
 	async refreshRemoteConfig(options: { force?: boolean } = {}): Promise<boolean> {
 		const userId = this.authService.getInfo().user?.uid ?? "signed-out"
 		const organizationId = this.authService.getActiveOrganizationId() ?? "no-org"
@@ -814,81 +797,12 @@ export class Controller {
 	}
 
 	async rematerializeRemoteConfig(): Promise<void> {
-		// force: this runs right after a toggle/opt-out mutation; coalescing onto
-		// an in-flight refresh that sampled the pre-mutation state would report
-		// success while applying the old configuration.
-		const refreshed = await this.refreshRemoteConfig({ force: true })
-		if (!refreshed) {
-			throw new Error("Could not apply managed configuration change. Check your connection and try again.")
-		}
-		await this.sessions.endActiveSession("remoteConfigToggle", { awaitStop: true })
-		await this.postStateToWebview()
+		throw new ClineCloudDisabledError()
 	}
 
 	private async ensureRemoteConfigForSessionStart(): Promise<void> {
-		const startedAt = Date.now()
 		await this.waitForInitialRemoteConfig()
-		let refreshed = false
-		try {
-			refreshed = await this.refreshRemoteConfig()
-		} catch (error) {
-			// A rejected refresh must degrade to the same fallback logic as a
-			// false return: otherwise a filesystem error on the clear path (e.g.
-			// EACCES on the remote-config workspace) blocks even unmanaged users
-			// from starting sessions with a raw fs error.
-			Logger.error("[SdkController] Remote config refresh threw during session gate:", error)
-		}
-		const activeOrganizationId = this.authService.getActiveOrganizationId()
-		if (refreshed) {
-			void telemetryService.captureRemoteConfigSessionGate({
-				outcome: "refreshed",
-				durationMs: Date.now() - startedAt,
-				managed: Boolean(activeOrganizationId),
-			})
-			return
-		}
-
-		if (!activeOrganizationId) {
-			if (this.stateManager.getGlobalStateKey("lastManagedOrganizationId")) {
-				// This install last ran under organization policy, but the current
-				// identity could not be resolved (refresh failed and no org was
-				// restored — e.g. the API is unreachable). Fail closed rather than
-				// starting an unpoliced session.
-				void telemetryService.captureRemoteConfigSessionGate({
-					outcome: "blocked",
-					durationMs: Date.now() - startedAt,
-					managed: true,
-				})
-				throw new Error("Could not verify organization policy. Check your connection and try again.")
-			}
-			// No organization policy applies to personal or signed-out use; a
-			// failed refresh must not block local work.
-			void telemetryService.captureRemoteConfigSessionGate({
-				outcome: "unmanaged",
-				durationMs: Date.now() - startedAt,
-				managed: false,
-			})
-			return
-		}
-
-		const bundleOrganizationId = this.remoteConfigBundle?.metadata?.organizationId
-		if (bundleOrganizationId === activeOrganizationId) {
-			Logger.warn("[SdkController] Remote config refresh failed; starting with last known-good organization policy")
-			void telemetryService.captureRemoteConfigSessionGate({
-				outcome: "last_known_good",
-				durationMs: Date.now() - startedAt,
-				managed: true,
-			})
-			return
-		}
-		void telemetryService.captureRemoteConfigSessionGate({
-			outcome: "blocked",
-			durationMs: Date.now() - startedAt,
-			managed: true,
-		})
-		throw new Error("Could not verify organization policy. Check your connection and try again.")
 	}
-
 	private createRemoteConfigAwareSessionHost(): Promise<VscodeSessionHost> {
 		return VscodeSessionHost.create({
 			mcpHub: this.mcpHub,
@@ -898,25 +812,21 @@ export class Controller {
 	}
 
 	private async performRemoteConfigRefresh(isCurrent: () => boolean): Promise<boolean> {
-		const refreshed = await refreshSdkRemoteConfig(this, {
-			workspacePath: await this.getRemoteConfigWorkspacePath(),
-			isCurrent,
-		})
-		if (!isCurrent()) {
-			return false
-		}
-		// Remote config may have materialized new workflows/skills/rules under
-		// `.cline/remote-config/`. Refresh the watcher so slash-command expansion
-		// sees them without waiting on filesystem events.
-		await this.refreshUserInstructionWatchers()
-		return refreshed
+		return refreshSdkRemoteConfig(this, { isCurrent })
 	}
 
-	setRemoteConfigAvailable(available: boolean): void {
-		this.remoteConfigAvailable = available
+	setRemoteConfigAvailable(_available: boolean): void {
+		// Hosted policy remains unavailable regardless of legacy callers or settings.
 	}
-
 	async setRemoteConfigCoreIntegration(integration: PreparedRemoteConfigCoreIntegration | undefined): Promise<void> {
+		if (integration) {
+			try {
+				await integration.dispose()
+			} catch (error) {
+				Logger.error("[SdkController] Failed to dispose rejected remote config integration:", error)
+			}
+			throw new ClineCloudDisabledError()
+		}
 		const previous = this.remoteConfigCoreIntegration
 		this.remoteConfigCoreIntegration = integration
 		if (previous !== integration) {
@@ -942,11 +852,6 @@ export class Controller {
 
 	async dispose(): Promise<void> {
 		this.providerConfigStoreSubscription.dispose()
-		// Clear the remote config timer to prevent stale fetches
-		if (this.remoteConfigTimer) {
-			clearInterval(this.remoteConfigTimer)
-			this.remoteConfigTimer = undefined
-		}
 		await this.setRemoteConfigCoreIntegration(undefined)
 		this.isDisposed = true
 		// Tear down the debounced state-post machinery before downstream resources
@@ -1179,19 +1084,6 @@ export class Controller {
 			}
 		})()
 		return this.noWorkspaceFallbackPromise
-	}
-
-	private async getRemoteConfigWorkspacePath(): Promise<string | undefined> {
-		try {
-			const { paths } = await HostProvider.workspace.getWorkspacePaths({})
-			if (!paths.length) {
-				return undefined
-			}
-			return resolveWorkspaceRootPath(paths, paths[0])
-		} catch (error) {
-			Logger.warn("[SdkController] Failed to get workspace paths for remote config, using global fallback:", error)
-			return undefined
-		}
 	}
 
 	// ---- Session event subscription ----
@@ -2011,20 +1903,11 @@ export class Controller {
 
 	async handleSignOut(): Promise<void> {
 		const sessionProviderId = this.getSessionProviderId() ?? this.getActiveProviderId()
-		// Capture before deauth nulls the auth info, so the per-org config cache
-		// (which can hold enterprise secrets) is actually deleted on sign-out.
-		const organizationId = this.authService.getActiveOrganizationId() ?? undefined
 		await this.taskControl.cancelClineTaskOnSignOut(isClineManagedProvider(sessionProviderId))
 		await this.authService.handleDeauth(LogoutReason.USER_INITIATED)
-		// Invalidate BEFORE clearing: a refresh that already fetched under the
-		// signed-in identity must not republish the policy (and re-create the
-		// secret-bearing caches) after the clear. The clear itself runs under the
-		// same publication lock refreshes use, so it cannot interleave either.
+		// Serialize runtime cleanup against any in-flight legacy refresh.
 		this.remoteConfigRefreshCoordinator.invalidate()
-		await clearSdkRemoteConfig(this, {
-			workspacePath: await this.getRemoteConfigWorkspacePath(),
-			organizationId,
-		})
+		await clearSdkRemoteConfig(this)
 		await this.postStateToWebview()
 	}
 
@@ -2035,9 +1918,6 @@ export class Controller {
 
 	async handleAuthCallback(customToken: string, provider: string | null = null): Promise<void> {
 		await this.authService.handleAuthCallback(customToken, provider ?? "cline")
-		// Fetch remote config immediately after login so enterprise policies
-		// (provider lockdown, MCP servers, OTel, etc.) are applied right away.
-		await this.refreshRemoteConfig()
 		await this.postStateToWebview()
 	}
 

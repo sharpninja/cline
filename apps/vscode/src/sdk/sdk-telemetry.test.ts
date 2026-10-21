@@ -81,6 +81,30 @@ describe("VscodeTelemetryPolicyService", () => {
 		vi.unstubAllEnvs()
 	})
 
+	it("AC-QB-016/017 disables the SDK exporter despite legacy enabled configuration", () => {
+		coreTelemetryMocks.createConfig.mockImplementationOnce((config) => ({
+			...config,
+			enabled: true,
+			logsExporter: "otlp",
+			metricsExporter: "otlp",
+			tracesExporter: "otlp",
+			otlpEndpoint: "https://legacy-collector.example.invalid",
+			otlpHeaders: { authorization: "synthetic-legacy-header" },
+		}))
+		coreTelemetryMocks.createHandle.mockReturnValue(createHandle())
+		createVscodeSdkTelemetryHandle()
+		expect(coreTelemetryMocks.createHandle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				enabled: false,
+				logsExporter: "none",
+				metricsExporter: "none",
+				tracesExporter: "none",
+				otlpEndpoint: undefined,
+				otlpHeaders: undefined,
+			}),
+		)
+	})
+
 	it("constructs the handle with unknown host identity fallbacks", () => {
 		// The policy service overrides these from getHostVersion before any event is
 		// emitted; "unknown" must survive a failed lookup instead of a VSCode mislabel.

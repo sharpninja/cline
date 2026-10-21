@@ -1,3 +1,4 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import { ToggleHookRequest, ToggleHookResponse } from "@shared/proto/cline/file"
 import fs from "fs/promises"
 import { HookDiscoveryCache } from "../../hooks/HookDiscoveryCache"
@@ -29,7 +30,7 @@ export async function toggleHook(
 		// Toggle executable bit (Unix-like systems only)
 		// TODO(PR-9552 follow-up): Revisit chmod-driven enablement semantics
 		// once cross-platform JSON-backed state is implemented.
-		await fs.chmod(hookPath, enabled ? 0o755 : 0o644)
+		await fs.chmod(validateStoragePath(hookPath), enabled ? 0o755 : 0o644)
 	}
 
 	// Invalidate cache

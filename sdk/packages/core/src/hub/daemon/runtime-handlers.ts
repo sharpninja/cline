@@ -11,6 +11,7 @@ import type {
 } from "../../cron/service/schedule-service";
 import type { VerifySubmitExecutor } from "../../extensions/tools";
 import { LocalRuntimeHost } from "../../runtime/host/local-runtime-host";
+import type { RuntimeHost } from "../../runtime/host/runtime-host";
 import { SqliteSessionStore } from "../../services/storage/sqlite-session-store";
 import { withSessionHistoryOriginMetadata } from "../../session/history-origin";
 import { CoreSessionService } from "../../session/services/session-service";
@@ -62,6 +63,12 @@ function resolveMode(
 
 export interface CreateLocalHubScheduleRuntimeHandlersOptions
 	extends Pick<HubScheduleServiceOptions, "logger"> {
+	/** Host-owned runtime shared with ordinary sessions. When supplied, no default
+	 * runtime or store is constructed; refusal stays with this host. */
+	sessionHost?: Pick<
+		RuntimeHost,
+		"startSession" | "runTurn" | "abort" | "stopSession"
+	>;
 	/**
 	 * Custom `fetch` implementation forwarded to the scheduler's internal
 	 * `LocalRuntimeHost`. Used by the AI gateway providers for every
@@ -75,16 +82,18 @@ export function createLocalHubScheduleRuntimeHandlers(
 	options: CreateLocalHubScheduleRuntimeHandlersOptions = {},
 ): HubScheduleRuntimeHandlers {
 	const submitScheduledRun: VerifySubmitExecutor = async (summary) => summary;
-	const sessionHost = new LocalRuntimeHost({
-		sessionService: new CoreSessionService(new SqliteSessionStore()),
-		capabilities: {
-			toolExecutors: {
-				submit: submitScheduledRun,
+	const sessionHost =
+		options.sessionHost ??
+		new LocalRuntimeHost({
+			sessionService: new CoreSessionService(new SqliteSessionStore()),
+			capabilities: {
+				toolExecutors: {
+					submit: submitScheduledRun,
+				},
 			},
-		},
-		fetch: options.fetch,
-		telemetry: options.telemetry,
-	});
+			fetch: options.fetch,
+			telemetry: options.telemetry,
+		});
 
 	return {
 		async startSession(request, options) {

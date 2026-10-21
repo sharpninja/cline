@@ -1,10 +1,11 @@
 import { mkdirSync } from "node:fs"
-import os from "os"
+import { getStorageNamespace, validateStoragePath } from "@cline/shared/storage"
 import path from "path"
 import type { Extension, ExtensionContext } from "vscode"
 import { ExtensionKind, ExtensionMode } from "vscode"
 import { URI } from "vscode-uri"
 import { ExtensionRegistryInfo } from "@/registry"
+import { resolveDataDirFromEnv } from "@/shared/storage/storage-context"
 import { log } from "./utils"
 import { EnvironmentVariableCollection, MementoStore, readJson, SecretStore } from "./vscode-context-utils"
 
@@ -15,10 +16,20 @@ log(`CLINE_ENVIRONMENT: ${process.env.CLINE_ENVIRONMENT}`)
 const SETTINGS_SUBFOLDER = "data"
 
 export function initializeContext(clineDir?: string) {
-	const CLINE_DIR = clineDir || process.env.CLINE_DIR || `${os.homedir()}/.cline`
-	const DATA_DIR = path.join(CLINE_DIR, SETTINGS_SUBFOLDER)
+	const DATA_DIR = validateStoragePath(clineDir ? path.join(clineDir, SETTINGS_SUBFOLDER) : resolveDataDirFromEnv())
 	const INSTALL_DIR = process.env.INSTALL_DIR || __dirname
-	const WORKSPACE_STORAGE_DIR = process.env.WORKSPACE_STORAGE_DIR || path.join(DATA_DIR, "workspace")
+	const workspaceOverride = getStorageNamespace()
+		? process.env.CLINE_QB_WORKSPACE_STORAGE_DIR
+		: process.env.WORKSPACE_STORAGE_DIR
+	const WORKSPACE_STORAGE_DIR = validateStoragePath(workspaceOverride || path.join(DATA_DIR, "workspace"))
+
+	// Preflight all child stores before construction can read or create state.
+	for (const file of [
+		path.join(DATA_DIR, "globalState.json"),
+		path.join(DATA_DIR, "secrets.json"),
+		path.join(WORKSPACE_STORAGE_DIR, "workspaceState.json"),
+	])
+		validateStoragePath(file)
 
 	mkdirSync(DATA_DIR, { recursive: true })
 	mkdirSync(WORKSPACE_STORAGE_DIR, { recursive: true })

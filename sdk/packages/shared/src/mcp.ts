@@ -49,3 +49,14 @@ export function formatMcpTimeoutErrorMessage(
 		`Increase the "timeout" field (in seconds) for this server in cline_mcp_settings.json.`
 	);
 }
+
+/** Reject persisted Cline remote-control entries before any MCP or OAuth I/O. */
+export function assertUserConfiguredMcp(config: {
+	remoteConfigured?: boolean;
+}): void {
+	if (config.remoteConfigured === true) {
+		throw new Error(
+			"Cline remote-configured MCP servers are unavailable in cline-qb. Configure a user-controlled MCP server explicitly.",
+		);
+	}
+}

@@ -221,6 +221,66 @@ describe("LocalRuntimeHost", () => {
 		}
 	});
 
+	it("captures host runtime configuration for lead and delegated construction", async () => {
+		const configureAgentRuntime = vi.fn((config) => config);
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("host-policy-agent"),
+			getConversationId: vi.fn().mockReturnValue("host-policy-conversation"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		const createAgent = vi.fn((_config: AgentConfig) => agent as never);
+		const options = {
+			distinctId,
+			sessionService: new FileSessionService(
+				join(isolatedHomeDir, "policy-sessions"),
+			),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent,
+			configureAgentRuntime,
+		};
+		const manager = new RuntimeHostUnderTest(options);
+		options.configureAgentRuntime = vi.fn(() => {
+			throw new Error("mutated caller options");
+		});
+		try {
+			await manager.startSession({
+				config: {
+					providerId: "mock-provider",
+					modelId: "mock-model",
+					systemPrompt: "Test",
+					cwd: isolatedHomeDir,
+					workspaceRoot: isolatedHomeDir,
+					enableTools: false,
+					enableSpawnAgent: false,
+					enableAgentTeams: false,
+				},
+			});
+			expect(createAgent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					configureAgentRuntime,
+					cwd: isolatedHomeDir,
+					workspaceRoot: isolatedHomeDir,
+				}),
+			);
+			expect(runtimeBuilder.build).toHaveBeenCalledWith(
+				expect.objectContaining({ configureAgentRuntime }),
+			);
+		} finally {
+			await manager.dispose();
+		}
+	});
 	it("preserves a caller-owned telemetry identity when no distinct id is supplied", async () => {
 		const setDistinctId = vi.fn();
 		const manager = new RuntimeHostUnderTest({

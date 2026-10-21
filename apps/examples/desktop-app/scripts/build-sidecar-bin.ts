@@ -39,7 +39,7 @@ const resolveBunCompileTarget = (targetTriple: string): string | undefined => {
 
 const sidecarOutfile = (targetTriple: string): string => {
 	const extension = targetTriple.includes("windows") ? ".exe" : "";
-	return `./src-tauri/bin/code-sidecar-${targetTriple}${extension}`;
+	return `./src-tauri/bin/cline-qb-sidecar-${targetTriple}${extension}`;
 };
 
 const buildSidecar = async (
@@ -49,10 +49,7 @@ const buildSidecar = async (
 	minify = false,
 ): Promise<string> => {
 	const bunTarget = resolveBunCompileTarget(targetTriple);
-	// Telemetry config must be inlined into the compiled binary: a packaged
-	// app launched from Finder/the Dock has no OTEL_* env at runtime, so
-	// without this the sidecar silently ships with telemetry disabled.
-	// Verify with `<binary> --telemetry-selfcheck` after building.
+	// Fixed empty defines prevent build-time telemetry and cloud configuration.
 	const defines = telemetryDefineArgs();
 	const optimizationArgs = minify ? ["--minify"] : [];
 	// A compiled Bun executable otherwise reads .env and bunfig.toml from its
@@ -108,7 +105,7 @@ const buildRemoteHelpers = async (): Promise<void> => {
 		await buildSidecar(
 			targetTriple,
 			`./src-tauri/bin/remote-helpers/cline-remote-helper-${targetTriple}`,
-			"../../../sdk/packages/core/dist/remote/remote-helper-entry.js",
+			"./sidecar/remote-helper-entry.ts",
 			true,
 		);
 	}

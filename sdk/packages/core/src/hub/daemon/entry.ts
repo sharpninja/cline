@@ -23,6 +23,7 @@ import {
 } from "../discovery/workspace";
 import { startHubWebSocketServer } from "../server";
 import { describeAddressInUse } from "./bind-diagnostics";
+import { getHubDaemonRuntime } from "./runtime-registration";
 import {
 	createHubDaemonShutdownCoordinator,
 	HUB_DAEMON_SHUTDOWN_DEADLINE_MS,
@@ -70,7 +71,10 @@ async function startHubWebSocketServerWithBindRetry(
 			// within the deadline; a lock still held past it means a live Hub
 			// owns this context, and the rule is connect or diagnose, never
 			// replace (exit code 3, below).
+			// Failed binding rolls back and disposes an explicitly supplied host.
+			// Only lock contention (before transport construction) can retry it.
 			if (
+				(options.sessionHost && isAddressInUseError(error)) ||
 				(!isAddressInUseError(error) && !isHubLockHeldError(error)) ||
 				Date.now() >= bindDeadline
 			) {
@@ -258,7 +262,9 @@ async function main(): Promise<void> {
 	const bindDeadline = Date.now() + HUB_STARTUP_BIND_RETRY_WINDOW_MS;
 	let server: Awaited<ReturnType<typeof startHubWebSocketServer>>;
 	try {
+		const runtime = getHubDaemonRuntime();
 		server = await startHubWebSocketServerWithBindRetry(bindDeadline, {
+			...runtime,
 			workspaceRoot: options.cwd,
 			onShutdownRequested: () => {
 				void requestOrQueueShutdown({
@@ -275,6 +281,7 @@ async function main(): Promise<void> {
 					: resolveSharedHubOwnerContext(),
 			telemetry: daemonTelemetry.telemetry,
 			runtimeHandlers: createLocalHubScheduleRuntimeHandlers({
+				...(runtime ? { sessionHost: runtime.sessionHost } : {}),
 				telemetry: daemonTelemetry.telemetry,
 			}),
 			cronOptions: { workspaceRoot: options.cwd },

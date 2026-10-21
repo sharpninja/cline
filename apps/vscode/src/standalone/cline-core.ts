@@ -1,3 +1,6 @@
+// Storage policy performs no network I/O and must precede service imports.
+import "../hosts/storage-bootstrap"
+
 // Side-effect import: in the standalone (JetBrains/CLI) build (IS_STANDALONE==="true"),
 // loading @/shared/net installs the undici EnvHttpProxyAgent as the global dispatcher
 // so all HTTP/inference honors proxy/CA configuration. It must run before any network
@@ -42,7 +45,6 @@ async function main() {
 	const coreInstanceId = process.env.CLINE_CORE_INSTANCE_ID
 
 	log("\n\n\nStarting cline-core service...\n\n\n")
-	log(`Environment variables: ${JSON.stringify(process.env)}`)
 
 	// Parse command line arguments
 	const args = parseArgs()
@@ -86,7 +88,10 @@ async function main() {
 		setupHostProvider(extensionContext, EXTENSION_DIR, DATA_DIR)
 
 		// Create shared file-backed storage
-		const storageContext = createStorageContext()
+		const storageContext = createStorageContext({
+			clineDir: args.config,
+			workspaceStorageDir: extensionContext.storageUri?.fsPath,
+		})
 		const webviewProvider = await initialize(storageContext)
 
 		// Enable the localhost HTTP server that handles auth redirects.

@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveDocumentsExtensionPath, validateStoragePath } from "@cline/shared/storage"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -51,7 +52,12 @@ export async function resolveHooksDirectory(
 	globalHooksDirOverride?: string,
 ): Promise<string> {
 	if (isGlobal) {
-		return globalHooksDirOverride || path.join(os.homedir(), "Documents", "Cline", "Hooks")
+		return validateStoragePath(
+			globalHooksDirOverride ||
+				(getStorageNamespace()
+					? resolveDocumentsExtensionPath("Hooks")
+					: path.join(os.homedir(), "Documents", "Cline", "Hooks")),
+		)
 	}
 
 	// For workspace hooks, find the correct workspace
@@ -62,12 +68,12 @@ export async function resolveHooksDirectory(
 		if (!targetWorkspace) {
 			throw new Error(`Workspace "${workspaceName}" not found`)
 		}
-		return path.join(targetWorkspace, ".clinerules", "hooks")
+		return validateStoragePath(path.join(targetWorkspace, ".clinerules", "hooks"))
 	}
 
 	// Single workspace: use getCwd
 	const cwd = await getCwd(getDesktopDir())
-	return path.join(cwd, ".clinerules", "hooks")
+	return validateStoragePath(path.join(cwd, ".clinerules", "hooks"))
 }
 
 /**
@@ -97,6 +103,7 @@ export async function resolveExistingHookPath(hooksDir: string, hookName: string
 
 	for (const candidate of candidates) {
 		if (await isRegularFile(candidate)) {
+			validateStoragePath(candidate)
 			return candidate
 		}
 	}
@@ -105,10 +112,13 @@ export async function resolveExistingHookPath(hooksDir: string, hookName: string
 }
 
 async function isRegularFile(filePath: string): Promise<boolean> {
+	validateStoragePath(filePath)
 	try {
-		const stat = await fs.stat(filePath)
+		const stat = await fs.stat(validateStoragePath(filePath))
+		validateStoragePath(filePath)
 		return stat.isFile()
 	} catch {
+		validateStoragePath(filePath)
 		return false
 	}
 }

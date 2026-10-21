@@ -22,10 +22,9 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager, RunEvent, State, WindowEvent,
 };
-use tauri_plugin_updater::UpdaterExt;
 
-const UPDATE_INITIAL_DELAY: Duration = Duration::from_secs(10);
-const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
+const UPDATES_DISABLED_MESSAGE: &str =
+    "Automatic updates are disabled in cline-qb. Install a matching reviewed build.";
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ICON_ID: &str = "cline-code";
 const TRAY_OPEN_MENU_ID: &str = "tray-open";
@@ -85,9 +84,6 @@ struct TrayMenuState {
     status: MenuItem<tauri::Wry>,
     hub_healthy: Mutex<bool>,
     running_sessions: MenuItem<tauri::Wry>,
-    // Shared by the tray menu and (on macOS) the application menu; None when
-    // this build cannot update itself. Its label follows the updater state.
-    check_for_updates: Option<MenuItem<tauri::Wry>>,
 }
 
 #[derive(Clone)]
@@ -107,7 +103,7 @@ struct UpdateStatus {
 impl Default for UpdateStatus {
     fn default() -> Self {
         Self {
-            state: "idle".to_string(),
+            state: "disabled".to_string(),
             version: None,
             error: None,
         }
@@ -117,81 +113,22 @@ impl Default for UpdateStatus {
 #[derive(Default)]
 struct UpdateState {
     status: Mutex<UpdateStatus>,
-    // Serializes whole updater cycles. The periodic loop and the on-demand
-    // check_for_update_now command run the same check/download/stage cycle;
-    // without exclusion, overlapping cycles can download the same bundle
-    // concurrently and the later one can overwrite a freshly staged "ready"
-    // with "idle"/"error" decided from its stale pre-await snapshot.
-    cycle: tokio::sync::Mutex<()>,
-    // Windows and Linux: the downloaded-but-not-installed update. On Windows,
-    // Update::install launches the NSIS installer and std::process::exit(0)s
-    // immediately; on Linux (deb/rpm) it runs `pkexec dpkg -i` / `rpm -U`,
-    // which pops a root password prompt. Either way installation must wait
-    // for the user-initiated restart instead of running inside the
-    // background cycle like it does on macOS.
-    #[cfg(not(target_os = "macos"))]
-    pending_install: Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>>,
 }
-
 impl UpdateState {
-    fn set(&self, state: &str, version: Option<String>, error: Option<String>) {
-        if let Ok(mut guard) = self.status.lock() {
-            *guard = UpdateStatus {
-                state: state.to_string(),
-                version,
-                error,
-            };
-        }
-    }
-
     fn snapshot(&self) -> UpdateStatus {
         self.status
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
-
-    fn ready_version(&self) -> Option<String> {
-        self.status.lock().ok().and_then(|guard| {
-            if guard.state == "ready" {
-                guard.version.clone()
-            } else {
-                None
-            }
-        })
-    }
 }
 
-fn tray_status_text(update_status: &UpdateStatus, hub_healthy: bool) -> &'static str {
-    match update_status.state.as_str() {
-        "checking" => "Status: Checking for Updates",
-        "downloading" => "Status: Downloading Update",
-        "ready" => "Status: Update Available",
-        "error" => "Status: Update Check Failed",
-        _ if hub_healthy => "Status: Healthy",
-        _ => "Status: Hub Disconnected",
+fn tray_status_text(_update_status: &UpdateStatus, hub_healthy: bool) -> &'static str {
+    if hub_healthy {
+        "Status: Healthy"
+    } else {
+        "Status: Hub Disconnected"
     }
-}
-
-// Label for the "Check for Updates..." menu item. While a cycle is in flight
-// the item is disabled (see update_menu_item_enabled) and narrates progress;
-// once an update is staged it turns into the restart action instead.
-fn update_menu_item_text(update_status: &UpdateStatus) -> String {
-    match (
-        update_status.state.as_str(),
-        update_status.version.as_deref(),
-    ) {
-        ("checking", _) => "Checking for Updates...".to_string(),
-        ("downloading", Some(version)) => format!("Downloading Update v{version}..."),
-        ("downloading", None) => "Downloading Update...".to_string(),
-        ("ready", Some(version)) => format!("Restart to Update to v{version}"),
-        ("ready", None) => "Restart to Update".to_string(),
-        _ => "Check for Updates...".to_string(),
-    }
-}
-
-fn update_menu_item_enabled(update_status: &UpdateStatus) -> bool {
-    !matches!(update_status.state.as_str(), "checking" | "downloading")
 }
 
 fn running_sessions_text(running_sessions: u32) -> String {
@@ -213,122 +150,6 @@ fn tray_tooltip_text(app_name: &str, running_sessions: u32) -> String {
 
 fn tray_badge_text(running_sessions: u32) -> Option<String> {
     (running_sessions > 0).then(|| running_sessions.to_string())
-}
-
-fn refresh_tray_status(app: &tauri::AppHandle, update_state: &UpdateState) {
-    let tray_menu = app.state::<TrayMenuState>();
-    let hub_healthy = tray_menu
-        .hub_healthy
-        .lock()
-        .map(|healthy| *healthy)
-        .unwrap_or(false);
-    let update_status = update_state.snapshot();
-    let _ = tray_menu
-        .status
-        .set_text(tray_status_text(&update_status, hub_healthy));
-    if let Some(item) = &tray_menu.check_for_updates {
-        let _ = item.set_text(update_menu_item_text(&update_status));
-        let _ = item.set_enabled(update_menu_item_enabled(&update_status));
-    }
-}
-
-fn set_update_status(
-    app: &tauri::AppHandle,
-    update_state: &UpdateState,
-    state: &str,
-    version: Option<String>,
-    error: Option<String>,
-) {
-    update_state.set(state, version, error);
-    refresh_tray_status(app, update_state);
-}
-
-// An empty endpoint list disables both background and on-demand updates.
-// Nightly builds use this configuration because they are Actions artifacts only.
-fn updates_enabled(app: &tauri::AppHandle) -> bool {
-    app.config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|config| config.get("endpoints"))
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|endpoints| !endpoints.is_empty())
-}
-
-async fn check_and_install_update(app: &tauri::AppHandle, state: &UpdateState) {
-    if !updates_enabled(app) {
-        return;
-    }
-    let _cycle = state.cycle.lock().await;
-    // An update that already finished downloading only needs a restart; keep
-    // reporting "ready" instead of flipping back to transient states unless a
-    // newer version shows up. Reading it under the cycle lock makes the
-    // snapshot authoritative for this whole cycle.
-    let ready_version = state.ready_version();
-    if ready_version.is_none() {
-        set_update_status(app, state, "checking", None, None);
-    }
-
-    let updater = match app.updater() {
-        Ok(updater) => updater,
-        Err(error) => {
-            set_update_status(app, state, "error", None, Some(error.to_string()));
-            return;
-        }
-    };
-
-    match updater.check().await {
-        Ok(Some(update)) => {
-            let version = update.version.clone();
-            if ready_version.as_deref() == Some(version.as_str()) {
-                return;
-            }
-            set_update_status(app, state, "downloading", Some(version.clone()), None);
-            // macOS: install right away — it only swaps the .app on disk and
-            // the running app keeps going until the user restarts. Windows
-            // and Linux: download only, because install() launches the NSIS
-            // installer and exits the process on the spot (Windows) or asks
-            // for the root password via pkexec (Linux deb/rpm); the staged
-            // bytes are installed by restart_to_apply_update instead.
-            #[cfg(target_os = "macos")]
-            match update.download_and_install(|_, _| {}, || {}).await {
-                Ok(()) => set_update_status(app, state, "ready", Some(version), None),
-                Err(error) => {
-                    set_update_status(app, state, "error", Some(version), Some(error.to_string()))
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            match update.download(|_, _| {}, || {}).await {
-                Ok(bytes) => {
-                    if let Ok(mut pending) = state.pending_install.lock() {
-                        *pending = Some((update, bytes));
-                    }
-                    set_update_status(app, state, "ready", Some(version), None);
-                }
-                Err(error) => {
-                    set_update_status(app, state, "error", Some(version), Some(error.to_string()))
-                }
-            }
-        }
-        Ok(None) => {
-            if ready_version.is_none() {
-                set_update_status(app, state, "idle", None, None);
-            }
-        }
-        Err(error) => {
-            if ready_version.is_none() {
-                set_update_status(app, state, "error", None, Some(error.to_string()));
-            }
-        }
-    }
-}
-
-async fn run_update_loop(app: tauri::AppHandle, state: Arc<UpdateState>) {
-    tokio::time::sleep(UPDATE_INITIAL_DELAY).await;
-    loop {
-        check_and_install_update(&app, &state).await;
-        tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
-    }
 }
 
 /// Lock order: `process` may be held while acquiring `ws_endpoint`, never
@@ -432,33 +253,20 @@ fn resolve_workspace_root(launch_cwd: &str) -> String {
     }
 }
 
-fn resolve_desktop_backend_script_path(context: &AppContext) -> Option<PathBuf> {
-    let launch_cwd = PathBuf::from(&context.launch_cwd);
-    let candidates = [
-        PathBuf::from(&context.workspace_root)
-            .join("apps")
-            .join("examples")
-            .join("desktop-app")
-            .join("sidecar")
-            .join("index.ts"),
-        launch_cwd.join("sidecar").join("index.ts"),
-        launch_cwd
-            .parent()
-            .map(|parent| parent.join("sidecar").join("index.ts"))
-            .unwrap_or_else(|| PathBuf::from("")),
-        launch_cwd
-            .join("apps")
-            .join("examples")
-            .join("desktop-app")
-            .join("sidecar")
-            .join("index.ts"),
-    ];
-    candidates.into_iter().find(|path| path.exists())
+fn resolve_desktop_backend_script_path(_context: &AppContext) -> Option<PathBuf> {
+    // Development runs the source used to build this shell, never code from
+    // the operator's opened workspace. Release requires the bundled backend.
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .join("sidecar/index.ts");
+    path.is_file().then_some(path)
 }
-
 fn desktop_backend_binary_names() -> Vec<String> {
     let extension = if cfg!(windows) { ".exe" } else { "" };
-    let bundled_name = format!("code-sidecar{extension}");
+    let bundled_name = format!("cline-qb-sidecar{extension}");
     let target_triple = option_env!("TAURI_ENV_TARGET_TRIPLE").unwrap_or("").trim();
     if target_triple.is_empty() {
         return vec![bundled_name];
@@ -466,53 +274,41 @@ fn desktop_backend_binary_names() -> Vec<String> {
 
     vec![
         bundled_name,
-        format!("code-sidecar-{target_triple}{extension}"),
+        format!("cline-qb-sidecar-{target_triple}{extension}"),
     ]
 }
 
-fn resolve_desktop_backend_binary_path(context: &AppContext) -> Option<PathBuf> {
+fn resolve_packaged_backend_binary_path(executable: &Path) -> Option<PathBuf> {
+    let directory = executable.parent()?;
+    let mut directories = vec![directory.to_path_buf()];
+    if let Some(parent) = directory.parent() {
+        directories.push(parent.join("Resources"));
+    }
+    for directory in directories {
+        let Ok(root) = directory.canonicalize() else {
+            continue;
+        };
+        for name in desktop_backend_binary_names() {
+            let path = directory.join(name);
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(canonical) = path.canonicalize() {
+                if canonical.starts_with(&root) {
+                    return Some(canonical);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_desktop_backend_binary_path(_context: &AppContext) -> Option<PathBuf> {
     if cfg!(debug_assertions) {
         return None;
     }
-    let explicit = std::env::var("CLINE_CODE_SIDECAR_BIN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let current_exe = std::env::current_exe().ok();
-    let mut candidates = Vec::new();
-    if let Some(path) = explicit {
-        candidates.push(path);
-    }
-
-    for binary_name in desktop_backend_binary_names() {
-        candidates.push(
-            PathBuf::from(&context.workspace_root)
-                .join("apps")
-                .join("examples")
-                .join("desktop-app")
-                .join("src-tauri")
-                .join("bin")
-                .join(&binary_name),
-        );
-        if let Some(path) = current_exe
-            .as_ref()
-            .and_then(|path| path.parent().map(|parent| parent.join(&binary_name)))
-        {
-            candidates.push(path);
-        }
-        if let Some(path) = current_exe.as_ref().and_then(|path| {
-            path.parent()
-                .and_then(|parent| parent.parent())
-                .map(|parent| parent.join("Resources").join(&binary_name))
-        }) {
-            candidates.push(path);
-        }
-    }
-
-    candidates.into_iter().find(|path| path.exists())
+    resolve_packaged_backend_binary_path(&std::env::current_exe().ok()?)
 }
-
 fn spawn_desktop_backend_process(context: &AppContext) -> Result<Child, String> {
     let mut command = if let Some(binary_path) = resolve_desktop_backend_binary_path(context) {
         let mut command = Command::new(binary_path);
@@ -521,6 +317,8 @@ fn spawn_desktop_backend_process(context: &AppContext) -> Result<Child, String> 
     } else if let Some(script_path) = resolve_desktop_backend_script_path(context) {
         let mut command = Command::new("bun");
         command
+            .arg("--no-autoload-dotenv")
+            .arg("--no-autoload-bunfig")
             .arg("run")
             .arg(script_path.to_string_lossy().to_string())
             .current_dir(&context.workspace_root);
@@ -669,81 +467,6 @@ fn ensure_desktop_backend_started_locked(
     Ok(())
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-/// Mirrors `resolveMcpSettingsPath()` in `@cline/shared/storage` (the resolver
-/// the sidecar and the hub runtime use): explicit path override, then the data
-/// dir override, then the cline dir override, then `~/.cline/data`. Keeping the
-/// same precedence here means the "Open MCP settings" window action opens the
-/// exact file the runtime reads (cline/cline#14152).
-fn resolve_mcp_settings_path() -> Result<PathBuf, String> {
-    if let Some(explicit) = non_empty_env("CLINE_MCP_SETTINGS_PATH") {
-        return Ok(PathBuf::from(explicit));
-    }
-    let data_dir = if let Some(data_dir) = non_empty_env("CLINE_DATA_DIR") {
-        PathBuf::from(data_dir)
-    } else if let Some(cline_dir) = non_empty_env("CLINE_DIR") {
-        PathBuf::from(cline_dir).join("data")
-    } else {
-        // USERPROFILE is the Windows equivalent of HOME (and what the sidecar's
-        // homedir() resolves there); HOME is usually unset on Windows.
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .map_err(|_| "neither HOME nor USERPROFILE is set".to_string())?;
-        PathBuf::from(home).join(".cline").join("data")
-    };
-    Ok(data_dir.join("settings").join("cline_mcp_settings.json"))
-}
-
-fn open_path_with_default_app(path: &Path) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = Command::new("open")
-            .arg(path)
-            .status()
-            .map_err(|e| format!("failed to open path: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("open command exited with status {status}"));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let path_arg = path.to_string_lossy().to_string();
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", &path_arg]);
-        hide_console_window(&mut command);
-        let status = command
-            .status()
-            .map_err(|e| format!("failed to open path: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("start command exited with status {status}"));
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let status = Command::new("xdg-open")
-            .arg(path)
-            .status()
-            .map_err(|e| format!("failed to open path: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("xdg-open command exited with status {status}"));
-    }
-
-    #[allow(unreachable_code)]
-    Err("opening files is not supported on this platform".to_string())
-}
-
 /// How long one `get_desktop_backend_endpoint` call waits for the sidecar's
 /// ready line. Sidecar startup includes login-shell PATH resolution (bounded
 /// at ~7.5s worst case, see sdk/packages/core/src/remote/shell-path.ts) plus session-manager init,
@@ -890,39 +613,8 @@ fn get_update_status(update_state: State<'_, Arc<UpdateState>>) -> UpdateStatus 
 }
 
 #[tauri::command]
-fn restart_to_apply_update(app: tauri::AppHandle) {
-    apply_staged_update(&app);
-}
-
-fn apply_staged_update(app: &tauri::AppHandle) {
-    let backend_state = app.state::<Arc<DesktopBackendState>>();
-    let update_state = app.state::<Arc<UpdateState>>();
-    // Neither restart() nor install() returns, so the run-loop Exit handler
-    // does not get a chance to stop the sidecar; shut it down explicitly
-    // first. On Windows this also releases the sidecar exe's file lock,
-    // which the NSIS installer needs in order to replace it.
-    backend_state.stop();
-    // Windows and Linux: install the bytes staged by the background cycle.
-    // On Windows install() launches the NSIS installer (which relaunches the
-    // app when done) and exits this process, so it only returns on failure.
-    // On Linux it installs the deb/rpm through pkexec and returns, and the
-    // restart below launches the new version. Either way a failure (or a
-    // dismissed password prompt) falls through to a plain restart of the
-    // current version.
-    #[cfg(not(target_os = "macos"))]
-    if let Some((update, bytes)) = update_state
-        .pending_install
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.take())
-    {
-        if let Err(error) = update.install(bytes) {
-            eprintln!("[updater] failed to install the update: {error}");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    let _ = update_state;
-    app.restart();
+fn restart_to_apply_update() -> Result<(), String> {
+    Err(UPDATES_DISABLED_MESSAGE.to_string())
 }
 
 /// Relaunch the current version of the app. Used after the sidecar replaces
@@ -944,30 +636,15 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// Run one updater check/download/stage cycle immediately instead of waiting
-/// for the next background interval, and report the resulting status. Used by
-/// flows that need an update staged right now (e.g. the "Cline Hub was
-/// updated" prompt), where restarting without a staged update would just
-/// relaunch the same version.
+/// Retained for older webviews; it cannot contact an update service or install bytes.
 #[tauri::command]
-async fn check_for_update_now(
-    app: tauri::AppHandle,
-    update_state: State<'_, Arc<UpdateState>>,
-) -> Result<UpdateStatus, String> {
-    check_and_install_update(&app, update_state.inner()).await;
-    Ok(update_state.snapshot())
+fn check_for_update_now() -> Result<UpdateStatus, String> {
+    Ok(UpdateStatus::default())
 }
 
-/// "Check for Updates..." menu item (tray and, on macOS, application menu).
-/// With an update already staged the item reads "Restart to Update" and does
-/// exactly that; otherwise the webview runs the check so it can report the
-/// outcome (up to date / update ready / failed) in its own UI.
+/// Stale native menu events only display the product's disabled-update guidance.
 fn handle_check_for_updates_menu(app: &tauri::AppHandle) {
-    if app.state::<Arc<UpdateState>>().ready_version().is_some() {
-        apply_staged_update(app);
-    } else {
-        queue_desktop_action(app, DesktopAction::CheckForUpdates);
-    }
+    queue_desktop_action(app, DesktopAction::CheckForUpdates);
 }
 
 /// Icon ids accepted by `set_app_icon`; kept in sync with APP_ICONS in
@@ -1054,27 +731,6 @@ async fn set_app_icon(app: tauri::AppHandle, icon: String) -> Result<bool, Strin
         let _ = app;
         Ok(false)
     }
-}
-
-#[tauri::command]
-fn open_mcp_settings_file() -> Result<String, String> {
-    let settings_path = resolve_mcp_settings_path()?;
-    if !settings_path.exists() {
-        if let Some(parent) = settings_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("failed creating MCP settings directory: {e}"))?;
-        }
-        let initial = serde_json::json!({
-            "mcpServers": {}
-        });
-        let mut body = serde_json::to_vec_pretty(&initial)
-            .map_err(|e| format!("failed encoding MCP settings: {e}"))?;
-        body.push(b'\n');
-        fs::write(&settings_path, body)
-            .map_err(|e| format!("failed writing MCP settings file: {e}"))?;
-    }
-    open_path_with_default_app(&settings_path)?;
-    Ok(settings_path.to_string_lossy().to_string())
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -1437,7 +1093,6 @@ fn setup_tray_icon(
         status,
         hub_healthy: Mutex::new(true),
         running_sessions,
-        check_for_updates,
     });
     Ok(())
 }
@@ -1504,7 +1159,6 @@ fn main() {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(desktop_backend)
         .manage(app_context)
         .manage(Arc::new(UpdateState::default()))
@@ -1525,20 +1179,7 @@ fn main() {
             if let Err(error) = macos_notification::configure(app.handle()) {
                 eprintln!("[notification] setup failed: {error}");
             }
-            // Dev builds are not installed app bundles, so there is nothing the
-            // updater could meaningfully check or replace.
-            let updater_available = !cfg!(debug_assertions) && updates_enabled(app.handle());
-            let check_for_updates = updater_available
-                .then(|| {
-                    MenuItem::with_id(
-                        app,
-                        CHECK_FOR_UPDATES_MENU_ID,
-                        update_menu_item_text(&UpdateStatus::default()),
-                        true,
-                        None::<&str>,
-                    )
-                })
-                .transpose()?;
+            let check_for_updates: Option<MenuItem<tauri::Wry>> = None;
             #[cfg(target_os = "macos")]
             setup_application_menu(app, check_for_updates.as_ref())?;
             setup_tray_icon(app, check_for_updates)?;
@@ -1553,13 +1194,6 @@ fn main() {
                     eprintln!("[desktop-backend] startup failed: {error}");
                 }
             });
-            if updater_available {
-                let update_state = app.state::<Arc<UpdateState>>().inner().clone();
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    run_update_loop(app_handle, update_state).await;
-                });
-            }
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_secs(5));
                 if backend_state.is_shutting_down() {
@@ -1582,7 +1216,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_desktop_backend_endpoint,
             pick_workspace_directory,
-            open_mcp_settings_file,
             get_update_status,
             restart_to_apply_update,
             check_for_update_now,
@@ -1614,6 +1247,88 @@ fn main() {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    fn private_test_directory(label: &str) -> PathBuf {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{label}-{}-{time}", std::process::id()));
+        fs::create_dir(&path).expect("test directory must be new and owned by this fixture");
+        path
+    }
+    #[test]
+    fn packaged_backend_uses_private_bundle_candidates_only() {
+        let root = private_test_directory("qb-packaged-backend");
+        let install = root.join("app/Contents/MacOS");
+        fs::create_dir_all(&install).unwrap();
+        let executable = install.join("cline-qb-app");
+        fs::write(install.join("code-sidecar"), "upstream runtime").unwrap();
+        assert_eq!(resolve_packaged_backend_binary_path(&executable), None);
+        let name = desktop_backend_binary_names().remove(0);
+        let own = install.join(&name);
+        fs::write(&own, "owned runtime").unwrap();
+        assert_eq!(
+            resolve_packaged_backend_binary_path(&executable),
+            Some(own.canonicalize().unwrap())
+        );
+        fs::remove_file(&own).unwrap();
+        let resources = root.join("app/Contents/Resources");
+        fs::create_dir_all(&resources).unwrap();
+        let bundled = resources.join(name);
+        fs::write(&bundled, "owned resource runtime").unwrap();
+        assert_eq!(
+            resolve_packaged_backend_binary_path(&executable),
+            Some(bundled.canonicalize().unwrap())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_backend_rejects_symlink_escape() {
+        let root = private_test_directory("qb-packaged-alias");
+        let install = root.join("private");
+        fs::create_dir_all(&install).unwrap();
+        let upstream = root.join("upstream-sidecar");
+        fs::write(&upstream, "upstream").unwrap();
+        let own = install.join(desktop_backend_binary_names().remove(0));
+        std::os::unix::fs::symlink(&upstream, &own).unwrap();
+        assert_eq!(
+            resolve_packaged_backend_binary_path(&install.join("cline-qb-app")),
+            None
+        );
+        assert_eq!(fs::read_to_string(upstream).unwrap(), "upstream");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backend_binary_names_are_private() {
+        assert!(desktop_backend_binary_names()
+            .iter()
+            .all(|name| name.starts_with("cline-qb-sidecar")));
+    }
+
+    #[test]
+    fn development_backend_does_not_use_opened_workspace_code() {
+        let path = private_test_directory("qb-native-workspace");
+        fs::create_dir_all(path.join("sidecar")).unwrap();
+        fs::write(
+            path.join("sidecar/index.ts"),
+            "throw new Error('upstream runtime');",
+        )
+        .unwrap();
+        let context = AppContext {
+            workspace_root: path.to_string_lossy().into_owned(),
+            launch_cwd: path.to_string_lossy().into_owned(),
+        };
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("sidecar/index.ts");
+        let actual = resolve_desktop_backend_script_path(&context);
+        fs::remove_dir_all(path).unwrap();
+        assert_eq!(actual, Some(expected));
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1738,7 +1453,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_status_prioritizes_update_progress_over_hub_health() {
+    fn tray_status_ignores_stale_update_state() {
         let status = |state: &str| UpdateStatus {
             state: state.to_string(),
             version: None,
@@ -1752,50 +1467,33 @@ mod tests {
         );
         assert_eq!(
             tray_status_text(&status("checking"), false),
-            "Status: Checking for Updates"
+            "Status: Hub Disconnected"
         );
         assert_eq!(
             tray_status_text(&status("downloading"), false),
-            "Status: Downloading Update"
+            "Status: Hub Disconnected"
         );
         assert_eq!(
             tray_status_text(&status("ready"), false),
-            "Status: Update Available"
+            "Status: Hub Disconnected"
         );
         assert_eq!(
             tray_status_text(&status("error"), false),
-            "Status: Update Check Failed"
+            "Status: Hub Disconnected"
         );
     }
 
     #[test]
-    fn check_for_updates_menu_item_follows_updater_state() {
-        let status = |state: &str, version: Option<&str>| UpdateStatus {
-            state: state.to_string(),
-            version: version.map(str::to_string),
-            error: None,
-        };
-
-        let idle = status("idle", None);
-        assert_eq!(update_menu_item_text(&idle), "Check for Updates...");
-        assert!(update_menu_item_enabled(&idle));
-        let failed = status("error", None);
-        assert_eq!(update_menu_item_text(&failed), "Check for Updates...");
-        assert!(update_menu_item_enabled(&failed));
-
-        let checking = status("checking", None);
-        assert_eq!(update_menu_item_text(&checking), "Checking for Updates...");
-        assert!(!update_menu_item_enabled(&checking));
-        let downloading = status("downloading", Some("1.2.3"));
+    fn native_update_commands_refuse_install_and_never_report_ready() {
+        let state = UpdateState::default();
+        assert_eq!(state.snapshot().state, "disabled");
+        let result = check_for_update_now().unwrap();
+        assert_eq!(result.state, "disabled");
+        assert!(result.version.is_none());
         assert_eq!(
-            update_menu_item_text(&downloading),
-            "Downloading Update v1.2.3..."
+            restart_to_apply_update(),
+            Err(UPDATES_DISABLED_MESSAGE.to_string())
         );
-        assert!(!update_menu_item_enabled(&downloading));
-
-        let ready = status("ready", Some("1.2.3"));
-        assert_eq!(update_menu_item_text(&ready), "Restart to Update to v1.2.3");
-        assert!(update_menu_item_enabled(&ready));
     }
 
     #[test]

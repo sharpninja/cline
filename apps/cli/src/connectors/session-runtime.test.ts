@@ -109,13 +109,15 @@ describe("buildConnectorStartRequest", () => {
 	});
 
 	it("uses auth material resolved by provider settings manager", async () => {
-		mockGetLastUsedProviderSettings.mockReturnValue({ provider: "cline-pass" });
+		mockGetLastUsedProviderSettings.mockReturnValue({
+			provider: "openai-codex",
+		});
 		mockGetProviderSettings.mockReturnValue({
-			provider: "cline-pass",
-			auth: { accessToken: "workos:resolved-token" },
+			provider: "openai-codex",
+			auth: { accessToken: "resolved-token" },
 		});
 		mockGetProviderCollection.mockReturnValue({
-			provider: { env: ["CLINE_API_KEY"] },
+			provider: { env: ["OPENAI_API_KEY"] },
 		});
 		mockResolveSystemPrompt.mockResolvedValue("system");
 
@@ -128,40 +130,30 @@ describe("buildConnectorStartRequest", () => {
 			io: { writeln: vi.fn(), writeErr: vi.fn() },
 			loggerConfig: { enabled: false, level: "info", destination: "stdout" },
 			systemRules: "Rules",
-			defaultModel: "cline-pass/glm-5.2",
+			defaultModel: "fixture-direct-model",
 		});
 
-		expect(request.provider).toBe("cline-pass");
-		expect(request.apiKey).toBe("workos:resolved-token");
-		expect(request.model).toBe("cline-pass/glm-5.2");
+		expect(request.provider).toBe("openai-codex");
+		expect(request.apiKey).toBe("resolved-token");
+		expect(request.model).toBe("fixture-direct-model");
 	});
 
-	it("uses auth material resolved by provider settings manager", async () => {
-		mockGetLastUsedProviderSettings.mockReturnValue({ provider: "cline-pass" });
-		mockGetProviderSettings.mockReturnValue({
+	it("blocks inherited cloud credentials before provider/environment resolution", async () => {
+		mockGetLastUsedProviderSettings.mockReturnValue({
 			provider: "cline-pass",
-			auth: { accessToken: "workos:resolved-token" },
+			auth: { accessToken: "fixture" },
 		});
-		mockGetProviderCollection.mockReturnValue({
-			provider: { env: ["CLINE_API_KEY"] },
-		});
-		mockResolveSystemPrompt.mockResolvedValue("system");
-
-		const request = await buildConnectorStartRequest({
-			options: {
-				cwd: "/tmp/work",
-				mode: "act",
-				enableTools: false,
-			},
-			io: { writeln: vi.fn(), writeErr: vi.fn() },
-			loggerConfig: { enabled: false, level: "info", destination: "stdout" },
-			systemRules: "Rules",
-			defaultModel: "cline-pass/glm-5.2",
-		});
-
-		expect(request.provider).toBe("cline-pass");
-		expect(request.apiKey).toBe("workos:resolved-token");
-		expect(request.model).toBe("cline-pass/glm-5.2");
+		await expect(
+			buildConnectorStartRequest({
+				options: { cwd: "/tmp", mode: "act", enableTools: false },
+				io: { writeln: vi.fn(), writeErr: vi.fn() },
+				loggerConfig: { enabled: false, level: "info", destination: "stdout" },
+				systemRules: "rules",
+			}),
+		).rejects.toThrow("Configure a direct model provider");
+		expect(mockGetProviderSettings).not.toHaveBeenCalled();
+		expect(mockGetProviderCollection).not.toHaveBeenCalled();
+		expect(mockResolveSystemPrompt).not.toHaveBeenCalled();
 	});
 });
 

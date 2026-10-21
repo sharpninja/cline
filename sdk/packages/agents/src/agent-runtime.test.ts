@@ -3136,6 +3136,7 @@ describe("AgentRuntime", () => {
 
 		expect(beforeRun).toHaveBeenCalledOnce();
 		expect(beforeRun).toHaveBeenCalledWith({
+			input: "Run plugin",
 			snapshot: expect.objectContaining({
 				conversationId: "conversation_plugin",
 			}),

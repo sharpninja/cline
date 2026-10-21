@@ -1,27 +1,19 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cline",
+	"productName": "cline-qb",
 	"version": "0.0.45",
-	"identifier": "bot.cline.app",
+	"identifier": "ai.qbrain.clineqb",
 	"build": {
 		"beforeDevCommand": "bun run build:sidecar:bin && bun run dev:web",
-		"devUrl": "http://localhost:3125",
+		"devUrl": "http://localhost:32125",
 		"beforeBuildCommand": "bun run dmg:background && bun run build",
 		"frontendDist": "../webview/out"
-	},
-	"plugins": {
-		"updater": {
-			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENEMTJDNzk2RUExQUY3RDEKUldUUjl4cnFsc2NTelYxNzlFR1NkWnI0VTM1V0hvQXRyOW0xV2c0bFhkL3dhdkdpNGhNRW1MQXEK",
-			"endpoints": [
-				"https://github.com/cline/cline/releases/download/desktop-latest/latest.json"
-			]
-		}
 	},
 	"app": {
 		"windows": [
 			{
 				"label": "main",
-				"title": "Cline",
+				"title": "cline-qb",
 				"width": 1500,
 				"height": 980,
 				"resizable": true,
@@ -41,7 +33,7 @@
 		"shortDescription": "Cline AI coding agent",
 		"longDescription": "Cline is an AI coding agent. It reads your code, edits files, runs commands, and works through tasks with you in any project on your machine.",
 		"homepage": "https://cline.bot",
-		"externalBin": ["bin/code-sidecar"],
+		"externalBin": ["bin/cline-qb-sidecar"],
 		"resources": [
 			"icons/app/*.png",
 			"icons/app/macos/*.png",

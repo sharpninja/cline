@@ -367,7 +367,53 @@ describe("DesktopClient command deadlines", () => {
 	});
 });
 
+describe("DesktopClient private web endpoint", () => {
+	afterEach(() => vi.unstubAllEnvs());
+	it("ignores the upstream web endpoint override", async () => {
+		delete (window as unknown as Record<string, unknown>)
+			.__SIDECAR_WS_ENDPOINT__;
+		vi.stubEnv(
+			"NEXT_PUBLIC_SIDECAR_WS_ENDPOINT",
+			"ws://127.0.0.1:3126/transport",
+		);
+		const { resolveDesktopBackendWsEndpoint } = await import(
+			"./desktop-client"
+		);
+		expect(await resolveDesktopBackendWsEndpoint()).toBe(
+			"ws://127.0.0.1:32126/transport",
+		);
+	});
+	it("uses the private override without silently substituting another endpoint", async () => {
+		delete (window as unknown as Record<string, unknown>)
+			.__SIDECAR_WS_ENDPOINT__;
+		vi.stubEnv(
+			"NEXT_PUBLIC_CLINE_QB_SIDECAR_WS_ENDPOINT",
+			"ws://127.0.0.1:32129/transport",
+		);
+		const { resolveDesktopBackendWsEndpoint } = await import(
+			"./desktop-client"
+		);
+		expect(await resolveDesktopBackendWsEndpoint()).toBe(
+			"ws://127.0.0.1:32129/transport",
+		);
+	});
+});
 describe("DesktopClient endpoint resolution", () => {
+	it("routes native MCP settings through the sidecar's canonical storage policy", async () => {
+		tauriInvoke.mockResolvedValue("ws://127.0.0.1:32126/transport");
+		const { desktopClient } = await import("./desktop-client");
+		const pending = desktopClient.invoke("open_mcp_settings_file");
+		await vi.waitFor(() => expect(sockets).toHaveLength(1));
+		const socket = await connectLatestSocket();
+		expect(socket.lastRequest().command).toBe("open_mcp_settings_file");
+		socket.respond("/private/settings/cline_mcp_settings.json");
+		await expect(pending).resolves.toBe(
+			"/private/settings/cline_mcp_settings.json",
+		);
+		expect(tauriInvoke.mock.calls.map((c) => c[0])).not.toContain(
+			"open_mcp_settings_file",
+		);
+	});
 	const tauriInvoke = vi.fn<(command: string) => Promise<string>>();
 
 	beforeEach(() => {

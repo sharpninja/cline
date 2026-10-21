@@ -1,5 +1,9 @@
 import { existsSync } from "node:fs";
-import { isHubDaemonProcess, resolveClineBuildEnv } from "@cline/shared";
+import {
+	getHubNamespace,
+	isHubDaemonProcess,
+	resolveClineBuildEnv,
+} from "@cline/shared";
 import {
 	compareHubBuilds,
 	getManagedHubCompatibility,
@@ -9,6 +13,7 @@ import {
 	resolveHubBuildId,
 	resolveHubBuildIdentity,
 } from "../discovery";
+import { hasExplicitHubPort } from "../discovery/defaults";
 import {
 	resolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext,
@@ -19,7 +24,9 @@ const DEFAULT_WATCH_INTERVAL_MS = 10_000;
 const WATCH_INTERVAL_ENV = "CLINE_HUB_BUILD_WATCH_INTERVAL_MS";
 
 function resolveDefaultWatchIntervalMs(): number {
-	const configured = Number(process.env[WATCH_INTERVAL_ENV]);
+	const configured = getHubNamespace()
+		? NaN
+		: Number(process.env[WATCH_INTERVAL_ENV]);
 	return Number.isFinite(configured) && configured > 0
 		? configured
 		: DEFAULT_WATCH_INTERVAL_MS;
@@ -197,7 +204,7 @@ export interface WatchManagedHubBuildOptions {
 export function watchManagedHubBuildMismatch(
 	options: WatchManagedHubBuildOptions,
 ): () => void {
-	if (isHubDaemonProcess() || process.env.CLINE_HUB_PORT?.trim()) {
+	if (isHubDaemonProcess() || hasExplicitHubPort()) {
 		return () => {};
 	}
 	const intervalMs = options.intervalMs ?? resolveDefaultWatchIntervalMs();

@@ -23,7 +23,10 @@ export function shouldShowHubMismatchDialog(
 	if (reason === "unsupported_protocol" || reason === "outdated_hub") {
 		return true;
 	}
-	return updateState === "ready";
+	return (
+		updateState === "ready" ||
+		(updateState === "disabled" && reason === "build_mismatch")
+	);
 }
 
 /**

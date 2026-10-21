@@ -5,8 +5,19 @@ import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { ClineCoreStartInput, ITelemetryService, TelemetryProperties } from "@cline/core"
 import type { AgentRuntimeEvent } from "@cline/shared"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { readGitSnapshot, sanitizeGitRemote, VscodeGitTelemetry, VscodeGitTelemetryManager } from "./git-telemetry"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import type { VscodeGitTelemetry as GitTelemetryObserver } from "./git-telemetry"
+
+let readGitSnapshot: typeof import("./git-telemetry").readGitSnapshot
+let sanitizeGitRemote: typeof import("./git-telemetry").sanitizeGitRemote
+let VscodeGitTelemetry: typeof import("./git-telemetry").VscodeGitTelemetry
+let VscodeGitTelemetryManager: typeof import("./git-telemetry").VscodeGitTelemetryManager
+
+// The subject captures promisify(execFile) when it loads. Load it after the
+// asynchronous factory settles so both runners exercise the injected limits.
+beforeAll(async () => {
+	;({ readGitSnapshot, sanitizeGitRemote, VscodeGitTelemetry, VscodeGitTelemetryManager } = await import("./git-telemetry"))
+})
 
 const vscodeGit = vi.hoisted(() => ({
 	workspaceFolders: undefined as { uri: { fsPath: string } }[] | undefined,
@@ -46,7 +57,7 @@ const tmp = resolve(import.meta.dirname, "../../../../tmp")
 let cwd: string
 let enabled: boolean
 let events: { event: string; properties?: TelemetryProperties }[]
-let observers: VscodeGitTelemetry[]
+let observers: GitTelemetryObserver[]
 let telemetry: ITelemetryService
 const git = async (...args: string[]) =>
 	(
@@ -80,7 +91,7 @@ function observer(config: Partial<ClineCoreStartInput["config"]> = {}) {
 function runtimeEvent(type: string) {
 	return { type, snapshot: { agentId: "agent-1", runId: "run-1", iteration: 2 } } as AgentRuntimeEvent
 }
-async function beginModel(tracker: VscodeGitTelemetry, iteration = 2, waitForCapture = true) {
+async function beginModel(tracker: GitTelemetryObserver, iteration = 2, waitForCapture = true) {
 	const hooks = tracker.configure().hooks
 	const snapshot = { ...runtimeEvent("turn-started").snapshot, iteration }
 	await hooks?.beforeModel?.({ snapshot, request: { messages: [], tools: [] } })

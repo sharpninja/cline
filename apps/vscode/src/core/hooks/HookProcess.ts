@@ -1,3 +1,4 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import { ChildProcess, spawn } from "child_process"
 import { EventEmitter } from "events"
 import { existsSync } from "fs"
@@ -46,6 +47,7 @@ export async function getHookLaunchConfig(
 	scriptPath: string,
 	resolvePowerShellExecutable: () => Promise<string> = resolveWindowsPowerShellExecutable,
 ): Promise<HookLaunchConfig> {
+	validateStoragePath(scriptPath)
 	if (process.platform === "win32") {
 		const now = Date.now()
 
@@ -59,6 +61,7 @@ export async function getHookLaunchConfig(
 		}
 
 		const powerShellExecutable = await resolvedHookLauncherCommandPromise!
+		validateStoragePath(scriptPath)
 		return {
 			command: powerShellExecutable,
 			args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
@@ -122,6 +125,8 @@ export class HookProcess extends EventEmitter {
 	 * @param inputJson The JSON string to pass to the hook via stdin
 	 */
 	async run(inputJson: string): Promise<void> {
+		validateStoragePath(this.scriptPath)
+		if (this.cwd) validateStoragePath(this.cwd)
 		// Wrap in try/finally to guarantee cleanup even if errors occur
 		try {
 			return await new Promise((resolve, reject) => {
@@ -181,11 +186,13 @@ export class HookProcess extends EventEmitter {
 						// Running the hook anyway (with no explicit cwd) is not safe: its
 						// relative paths would resolve against the host process's own
 						// working directory, not the workspace it was written for.
-						if (this.cwd && !existsSync(this.cwd)) {
+						if (this.cwd && !existsSync(validateStoragePath(this.cwd))) {
 							throw new Error(
 								`Hook working directory '${this.cwd}' does not exist; not running hook '${this.scriptPath}'`,
 							)
 						}
+						validateStoragePath(this.scriptPath)
+						if (this.cwd) validateStoragePath(this.cwd)
 						this.childProcess = spawn(launchConfig.command, launchConfig.args, {
 							stdio: ["pipe", "pipe", "pipe"],
 							shell: launchConfig.shell,
@@ -200,7 +207,9 @@ export class HookProcess extends EventEmitter {
 						// never read its input is diagnosable from the error alone.
 						let inputFailure: string | undefined
 						const withInputFailure = (message: string) =>
-							inputFailure ? `${message} The hook stopped reading its input before it was fully delivered (${inputFailure}).` : message
+							inputFailure
+								? `${message} The hook stopped reading its input before it was fully delivered (${inputFailure}).`
+								: message
 
 						// Set up timeout
 						this.timeoutHandle = setTimeout(() => {
@@ -263,7 +272,11 @@ export class HookProcess extends EventEmitter {
 							if (code === 0) {
 								resolve()
 							} else {
-								reject(new Error(withInputFailure(`Hook exited with code ${code}${signal ? `, signal ${signal}` : ""}`)))
+								reject(
+									new Error(
+										withInputFailure(`Hook exited with code ${code}${signal ? `, signal ${signal}` : ""}`),
+									),
+								)
 							}
 						})
 
@@ -335,11 +348,17 @@ export class HookProcess extends EventEmitter {
 	 * so name the real culprit when that is what happened.
 	 */
 	private describeSpawnError(error: Error): Error {
-		const code = (error as NodeJS.ErrnoException).code
-		if (code === "ENOENT" && this.cwd && !existsSync(this.cwd)) {
-			return new Error(`Hook working directory '${this.cwd}' does not exist (reported by spawn as: ${error.message})`)
+		try {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code === "ENOENT" && this.cwd && !existsSync(validateStoragePath(this.cwd))) {
+				return new Error(`Hook working directory '${this.cwd}' does not exist (reported by spawn as: ${error.message})`)
+			}
+			return error
+		} catch (policyError) {
+			// Called from the child-process error event; report through rejection,
+			// never throw out of the event listener.
+			return policyError instanceof Error ? policyError : new Error(String(policyError))
 		}
-		return error
 	}
 
 	/**

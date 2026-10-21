@@ -2276,7 +2276,7 @@ describe("persisted run errors", () => {
 		const fullError =
 			providerId === "claude-code"
 				? "The run failed: API key expired. Sign in again with the `claude` CLI in a terminal, then try again."
-				: "The run failed: API key expired. Check your model connection in Settings → Providers (or sign in with Cline), then try again.";
+				: "The run failed: API key expired. Check your model connection in Settings → Providers, then try again.";
 		await renderMessages(messages, { error: fullError, status: "failed" });
 		expect(container.textContent?.split("API key expired.")).toHaveLength(2);
 		expect(container.textContent).toContain(fullError.replaceAll("`", ""));
@@ -2297,7 +2297,7 @@ describe("ChatMessages credential failures", () => {
 		meta: { reason: "credentials", providerId: "cline" },
 	};
 
-	it("offers a sign-in action inside the failure bubble and shows the failure once", async () => {
+	it("preserves a historical error once and routes its recovery action to API providers", async () => {
 		const onFixCredentials = vi.fn();
 		await renderMessages([failure], {
 			error: failure.content,
@@ -2315,11 +2315,12 @@ describe("ChatMessages credential failures", () => {
 		).toHaveLength(2);
 
 		const action = [...(bubble?.querySelectorAll("button") ?? [])].find(
-			(button) => button.textContent === "Sign in to Cline",
+			(button) => button.textContent === "Open API providers",
 		);
 		expect(action).toBeDefined();
 		await act(async () => action?.click());
-		expect(onFixCredentials).toHaveBeenCalledWith("account");
+		expect(onFixCredentials).toHaveBeenCalledWith("models");
+		expect(onFixCredentials).not.toHaveBeenCalledWith("account");
 	});
 
 	it("points known API providers at settings and skips local or unknown auth", async () => {

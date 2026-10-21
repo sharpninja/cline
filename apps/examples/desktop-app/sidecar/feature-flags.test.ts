@@ -1,383 +1,188 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-	buildClinePostHogClient: vi.fn(() => ({ kind: "posthog-client" })),
-	PostHogFeatureFlagsProvider: vi.fn(function PostHogFeatureFlagsProvider(
-		this: Record<string, unknown>,
-		options: unknown,
-	) {
-		this.kind = "posthog";
-		this.options = options;
-	}),
-	NoOpFeatureFlagsProvider: vi.fn(function NoOpFeatureFlagsProvider(
-		this: Record<string, unknown>,
-	) {
-		this.kind = "noop";
-	}),
-	resolveCoreDistinctId: vi.fn(() => "machine-distinct-id"),
-	poll: vi.fn(async () => {}),
-	dispose: vi.fn(async () => {}),
-	setContext: vi.fn(),
-	getBooleanFlagEnabled: vi.fn((_flag: unknown): boolean => false),
-	getFlagPayload: vi.fn((_flag: unknown): unknown => undefined),
-}));
-
-vi.mock("@cline/core", async () => {
-	const actual =
-		await vi.importActual<typeof import("@cline/core")>("@cline/core");
-	return {
-		...actual,
-		// Two known flags keep the snapshot assertions meaningful even as the
-		// real registry changes.
-		FEATURE_FLAGS: ["ext-cline-pass", "ext-demo-flag"],
-		NoOpFeatureFlagsProvider: mocks.NoOpFeatureFlagsProvider,
-		resolveCoreDistinctId: mocks.resolveCoreDistinctId,
-		FeatureFlagsService: class {
-			options: Record<string, unknown>;
-			constructor(options: Record<string, unknown>) {
-				this.options = options;
-			}
-			poll = mocks.poll;
-			dispose = mocks.dispose;
-			setContext = mocks.setContext;
-			getBooleanFlagEnabled = mocks.getBooleanFlagEnabled;
-			getFlagPayload = mocks.getFlagPayload;
-		},
-	};
-});
-
-vi.mock("@cline/core/services/feature-flags/posthog", () => ({
-	buildClinePostHogClient: mocks.buildClinePostHogClient,
-	PostHogFeatureFlagsProvider: mocks.PostHogFeatureFlagsProvider,
-}));
-
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FEATURE_FLAGS } from "@cline/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({
+	posthog: vi.fn(),
+	device: vi.fn(),
+	io: vi.fn(),
+}));
+vi.mock("@cline/core/services/feature-flags/posthog", () => ({
+	buildClinePostHogClient: mocks.posthog,
+	PostHogFeatureFlagsProvider: class {
+		enabled = true;
+		getSettings() {
+			return { enabled: true };
+		}
+		async getAllFlagsAndPayloads() {
+			mocks.posthog();
+			return { featureFlags: { "code-cloud-agents": true } };
+		}
+		async dispose() {}
+	},
+}));
+vi.mock("@cline/core", async () => ({
+	...(await vi.importActual<typeof import("@cline/core")>("@cline/core")),
+	resolveCoreDistinctId: mocks.device,
+}));
+vi.mock("node:fs", async () => {
+	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+	const wrap =
+		(name: keyof typeof actual) =>
+		(...args: unknown[]) => {
+			if (String(args[0]).includes("feature-flags"))
+				mocks.io(name, String(args[0]));
+			return (actual[name] as (...args: unknown[]) => unknown)(...args);
+		};
+	return {
+		...actual,
+		readFileSync: wrap("readFileSync"),
+		existsSync: wrap("existsSync"),
+		writeFileSync: wrap("writeFileSync"),
+		rmSync: wrap("rmSync"),
+	};
+});
 import {
 	buildFeatureFlagsSnapshot,
 	disposeDesktopFeatureFlagsService,
 	getDesktopFeatureFlagsContext,
 	getDesktopFeatureFlagsService,
+	identifyDesktopFeatureFlagsAccount,
+	isCloudAgentsAvailable,
+	isCloudAgentsEnabled,
+	readCloudAgentsEnvOverride,
 	refreshDesktopFeatureFlags,
 	resetDesktopFeatureFlagsForTesting,
 	setDesktopFeatureFlagsAccountContext,
 } from "./feature-flags";
-
-const originalApiKey = process.env.TELEMETRY_SERVICE_API_KEY;
-const originalIsTest = process.env.IS_TEST;
-const originalDataDir = process.env.CLINE_DATA_DIR;
-let tempDataDir: string;
-
-function accountContextPath(): string {
-	return join(tempDataDir, "cache", "feature-flags-account.cline-code.json");
-}
-
+let dir: string;
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.getBooleanFlagEnabled.mockReset().mockReturnValue(false);
 	resetDesktopFeatureFlagsForTesting();
-	delete process.env.IS_TEST;
-	delete process.env.E2E_TEST;
-	// Account context persists under the data dir; sandbox it per test.
-	tempDataDir = mkdtempSync(join(tmpdir(), "desktop-ff-test-"));
-	process.env.CLINE_DATA_DIR = tempDataDir;
+	dir = mkdtempSync(join(tmpdir(), "qb-flags-"));
+	vi.stubEnv("CLINE_DATA_DIR", dir);
+	vi.stubEnv("IS_TEST", "false");
+	vi.stubEnv("E2E_TEST", "false");
+	vi.stubEnv("TELEMETRY_SERVICE_API_KEY", "synthetic-key");
+	mocks.device.mockReturnValue("old-device");
 });
-
-afterEach(() => {
-	if (originalApiKey === undefined) {
-		delete process.env.TELEMETRY_SERVICE_API_KEY;
-	} else {
-		process.env.TELEMETRY_SERVICE_API_KEY = originalApiKey;
-	}
-	if (originalIsTest === undefined) {
-		delete process.env.IS_TEST;
-	} else {
-		process.env.IS_TEST = originalIsTest;
-	}
-	if (originalDataDir === undefined) {
-		delete process.env.CLINE_DATA_DIR;
-	} else {
-		process.env.CLINE_DATA_DIR = originalDataDir;
-	}
-	rmSync(tempDataDir, { recursive: true, force: true });
+afterEach(async () => {
+	await disposeDesktopFeatureFlagsService();
+	vi.unstubAllEnvs();
+	rmSync(dir, { recursive: true, force: true });
 });
-
-describe("getDesktopFeatureFlagsService", () => {
-	it("uses PostHog when the build-time key is inlined", () => {
-		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
-		getDesktopFeatureFlagsService();
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(1);
-		expect(mocks.buildClinePostHogClient).toHaveBeenCalledWith("phc_key");
-		expect(mocks.NoOpFeatureFlagsProvider).not.toHaveBeenCalled();
+describe("desktop hosted flag exclusion", () => {
+	it.each([
+		undefined,
+		"1",
+		"true",
+		"TRUE",
+		"0",
+		"false",
+		"malformed",
+	])("does not enable cloud with override %s", (value) => {
+		vi.stubEnv("CLINE_CODE_CLOUD_AGENTS", value);
+		expect(readCloudAgentsEnvOverride()).toBe(false);
+		expect(isCloudAgentsAvailable()).toBe(false);
+		expect(isCloudAgentsEnabled()).toBe(false);
+		expect(mocks.posthog).not.toHaveBeenCalled();
+		expect(mocks.device).not.toHaveBeenCalled();
 	});
-
-	it("falls back to the no-op provider when no key was inlined", () => {
-		delete process.env.TELEMETRY_SERVICE_API_KEY;
-		getDesktopFeatureFlagsService();
-		expect(mocks.NoOpFeatureFlagsProvider).toHaveBeenCalledTimes(1);
-		expect(mocks.PostHogFeatureFlagsProvider).not.toHaveBeenCalled();
-	});
-
-	it("never calls PostHog under IS_TEST even with a key present", () => {
-		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
-		process.env.IS_TEST = "true";
-		getDesktopFeatureFlagsService();
-		expect(mocks.NoOpFeatureFlagsProvider).toHaveBeenCalledTimes(1);
-		expect(mocks.PostHogFeatureFlagsProvider).not.toHaveBeenCalled();
-	});
-
-	it("returns one shared instance so the core and the webview agree", () => {
-		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
-		expect(getDesktopFeatureFlagsService()).toBe(
-			getDesktopFeatureFlagsService(),
-		);
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(1);
-	});
-});
-
-describe("feature flags context", () => {
-	it("defaults to the machine distinct ID under the cline-code client name", () => {
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.clientName).toBe("cline-code");
-		expect(context.distinctId).toBe("machine-distinct-id");
-	});
-
-	it("switches to the account ID once signed in, and pushes it to the service", () => {
-		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
-		getDesktopFeatureFlagsService();
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-1",
-			email: "dev@example.com",
+	it.each([
+		null,
+		"{bad",
+		JSON.stringify({
+			version: 1,
+			userId: "old-account",
+			email: "old@example.test",
+		}),
+	])("preserves but never loads legacy identity %s", async (raw) => {
+		mkdirSync(join(dir, "cache"), { recursive: true });
+		const account = join(dir, "cache", "feature-flags-account.cline-code.json");
+		const cache = join(dir, "cache", "feature-flags.cline-code.json");
+		const saved = JSON.stringify({
+			version: 2,
+			updatedAt: Date.now(),
+			userId: null,
+			flagsPayload: { featureFlags: { "code-cloud-agents": true } },
 		});
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.distinctId).toBe("acct-1");
-		expect(context.userId).toBe("acct-1");
-		expect(mocks.setContext).toHaveBeenCalledTimes(1);
+		if (raw !== null) writeFileSync(account, raw);
+		writeFileSync(cache, saved);
+		mocks.io.mockClear();
+		for (let round = 0; round < 2; round++) {
+			expect(getDesktopFeatureFlagsContext()).toEqual({
+				clientName: "cline-qb",
+			});
+			expect(
+				setDesktopFeatureFlagsAccountContext({
+					id: "new-account",
+					email: "new@example.test",
+				}),
+			).toBe(false);
+			await identifyDesktopFeatureFlagsAccount({ id: "other-account" });
+			expect(setDesktopFeatureFlagsAccountContext({})).toBe(false);
+			const snapshot = await refreshDesktopFeatureFlags();
+			expect(Object.keys(snapshot.flags)).toEqual([...FEATURE_FLAGS]);
+			expect(Object.values(snapshot.flags).every((x) => x === false)).toBe(
+				true,
+			);
+			await disposeDesktopFeatureFlagsService();
+			resetDesktopFeatureFlagsForTesting();
+		}
+		expect(mocks.io).not.toHaveBeenCalled();
+		expect(mocks.posthog).not.toHaveBeenCalled();
+		expect(mocks.device).not.toHaveBeenCalled();
+		if (raw !== null) expect(readFileSync(account, "utf8")).toBe(raw);
+		expect(readFileSync(cache, "utf8")).toBe(saved);
 	});
-
-	it("keeps the device identity when the account ID is blank", () => {
-		setDesktopFeatureFlagsAccountContext({ id: "   " });
-		expect(getDesktopFeatureFlagsContext().distinctId).toBe(
-			"machine-distinct-id",
-		);
-	});
-
-	it("clears the account identity on sign-out and falls back to the device", () => {
-		setDesktopFeatureFlagsAccountContext({ id: "acct-1" });
-		expect(getDesktopFeatureFlagsContext().userId).toBe("acct-1");
-
-		expect(setDesktopFeatureFlagsAccountContext({})).toBe(true);
-
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.userId).toBeUndefined();
-		// Must not be left on the signed-out account's ID.
-		expect(context.distinctId).toBe("machine-distinct-id");
-	});
-
-	it("reports no change when the same account is re-confirmed", () => {
-		expect(setDesktopFeatureFlagsAccountContext({ id: "acct-1" })).toBe(true);
-		expect(setDesktopFeatureFlagsAccountContext({ id: "acct-1" })).toBe(false);
-	});
-
-	it("reports no change when signed out twice", () => {
-		expect(setDesktopFeatureFlagsAccountContext({})).toBe(false);
-	});
-
-	it("re-points at the new account when switching accounts", () => {
-		setDesktopFeatureFlagsAccountContext({ id: "acct-1" });
-		expect(setDesktopFeatureFlagsAccountContext({ id: "acct-2" })).toBe(true);
-
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.userId).toBe("acct-2");
-		expect(context.distinctId).toBe("acct-2");
-	});
-
-	it("keeps the known email when an ID-only sync re-confirms the same account", () => {
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-1",
-			email: "beatrix@cline.bot",
+	it("cannot reactivate via cache, context or test mutation; has no telemetry", async () => {
+		const telemetry = { capture: vi.fn() } as never;
+		const service = getDesktopFeatureFlagsService({ telemetry });
+		vi.stubEnv("IS_TEST", "true");
+		service.setContext({ userId: "old-account", distinctId: "old-device" });
+		service.hydrateCache({
+			userId: "old-account",
+			updateTime: Date.now(),
+			flagsPayload: {
+				featureFlags: Object.fromEntries(FEATURE_FLAGS.map((f) => [f, true])),
+			},
 		});
-		// e.g. syncFeatureFlagsAccountFromSettings only knows the account ID.
-		expect(setDesktopFeatureFlagsAccountContext({ id: "acct-1" })).toBe(false);
-		expect(getDesktopFeatureFlagsContext().email).toBe("beatrix@cline.bot");
+		for (const flag of FEATURE_FLAGS) {
+			service.test(flag, true);
+			expect(service.getBooleanFlagEnabled(flag)).toBe(false);
+			expect(service.getFlagPayload(flag)).toBe(false);
+		}
+		await Promise.all([
+			service.poll(),
+			service.poll("old-account"),
+			refreshDesktopFeatureFlags(),
+		]);
+		expect(service.getCacheSnapshot()).toEqual({ updateTime: 0, userId: null });
+		expect(
+			Object.values(buildFeatureFlagsSnapshot(service).flags).every(
+				(x) => x === false,
+			),
+		).toBe(true);
+		expect(service.enabled).toBe(false);
+		expect(mocks.posthog).not.toHaveBeenCalled();
+		expect(mocks.device).not.toHaveBeenCalled();
+		expect(
+			(telemetry as { capture: ReturnType<typeof vi.fn> }).capture,
+		).not.toHaveBeenCalled();
 	});
-
-	it("drops the email when the account changes or signs out", () => {
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-1",
-			email: "beatrix@cline.bot",
-		});
-		setDesktopFeatureFlagsAccountContext({ id: "acct-2" });
-		expect(getDesktopFeatureFlagsContext().email).toBeUndefined();
-
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-2",
-			email: "other@cline.bot",
-		});
-		setDesktopFeatureFlagsAccountContext({});
-		expect(getDesktopFeatureFlagsContext().email).toBeUndefined();
-	});
-});
-
-describe("account context persistence", () => {
-	it("remembers the account identity across a sidecar restart", () => {
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-1",
-			email: "beatrix@cline.bot",
-		});
-		expect(existsSync(accountContextPath())).toBe(true);
-
-		// Simulate a fresh sidecar process: in-memory state gone, file kept.
-		resetDesktopFeatureFlagsForTesting();
-
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.userId).toBe("acct-1");
-		expect(context.distinctId).toBe("acct-1");
-		expect(context.email).toBe("beatrix@cline.bot");
-	});
-
-	it("deletes the persisted identity on sign-out", () => {
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-1",
-			email: "beatrix@cline.bot",
-		});
-		setDesktopFeatureFlagsAccountContext({});
-		expect(existsSync(accountContextPath())).toBe(false);
-
-		resetDesktopFeatureFlagsForTesting();
-		expect(getDesktopFeatureFlagsContext().userId).toBeUndefined();
-	});
-
-	it("a fetched account wins over a stale hydrated one", () => {
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-old",
-			email: "old@cline.bot",
-		});
-		resetDesktopFeatureFlagsForTesting();
-		setDesktopFeatureFlagsAccountContext({
-			id: "acct-new",
-			email: "new@example.com",
-		});
-		const context = getDesktopFeatureFlagsContext();
-		expect(context.userId).toBe("acct-new");
-		expect(context.email).toBe("new@example.com");
-	});
-});
-
-describe("buildFeatureFlagsSnapshot", () => {
-	it("resolves every known flag so the client needs no defaults", () => {
-		mocks.getFlagPayload.mockImplementation((flag: unknown) =>
-			flag === "ext-cline-pass" ? true : undefined,
-		);
-		const snapshot = buildFeatureFlagsSnapshot(
-			getDesktopFeatureFlagsService() as never,
-		);
-		expect(snapshot.flags).toEqual({
-			"ext-cline-pass": true,
-			// Unreturned flags resolve to false rather than being absent.
-			"ext-demo-flag": false,
-		});
-	});
-
-	it("passes non-boolean payloads through untouched", () => {
-		mocks.getFlagPayload.mockImplementation((flag: unknown) =>
-			flag === "ext-cline-pass" ? { variant: "b", limit: 3 } : false,
-		);
-		const snapshot = buildFeatureFlagsSnapshot(
-			getDesktopFeatureFlagsService() as never,
-		);
-		expect(snapshot.flags["ext-cline-pass"]).toEqual({
-			variant: "b",
-			limit: 3,
-		});
-	});
-});
-
-describe("refreshDesktopFeatureFlags", () => {
-	it("polls before returning the snapshot", async () => {
-		mocks.getFlagPayload.mockReturnValue(true);
-		const snapshot = await refreshDesktopFeatureFlags();
-		expect(mocks.poll).toHaveBeenCalledTimes(1);
-		expect(snapshot.flags["ext-cline-pass"]).toBe(true);
-	});
-
-	it("still returns cached values when the poll fails", async () => {
-		mocks.poll.mockRejectedValueOnce(new Error("offline"));
-		mocks.getFlagPayload.mockReturnValue(false);
-		const logger = { error: vi.fn(), log: vi.fn(), debug: vi.fn() };
-
-		const snapshot = await refreshDesktopFeatureFlags({ logger });
-
-		expect(snapshot.flags["ext-cline-pass"]).toBe(false);
-		expect(logger.error).toHaveBeenCalled();
-	});
-});
-
-describe("disposeDesktopFeatureFlagsService", () => {
-	it("disposes the live service and clears it", async () => {
-		process.env.TELEMETRY_SERVICE_API_KEY = "phc_key";
-		getDesktopFeatureFlagsService();
+	it("shares an inert service and replaces it after idempotent disposal", async () => {
+		const first = getDesktopFeatureFlagsService();
+		expect(getDesktopFeatureFlagsService()).toBe(first);
 		await disposeDesktopFeatureFlagsService();
-		expect(mocks.dispose).toHaveBeenCalledTimes(1);
-
-		// A later call builds a fresh service rather than reusing a disposed one.
-		getDesktopFeatureFlagsService();
-		expect(mocks.PostHogFeatureFlagsProvider).toHaveBeenCalledTimes(2);
-	});
-
-	it("is a no-op when nothing was created", async () => {
-		await expect(disposeDesktopFeatureFlagsService()).resolves.toBeUndefined();
-		expect(mocks.dispose).not.toHaveBeenCalled();
-	});
-});
-
-describe("cloud agents gate", () => {
-	beforeEach(() => {
-		delete process.env.CLINE_CODE_CLOUD_AGENTS;
-	});
-
-	it("is unavailable and disabled while the rollout flag is off", async () => {
-		const { isCloudAgentsAvailable, isCloudAgentsEnabled } = await import(
-			"./feature-flags"
-		);
-		expect(isCloudAgentsAvailable()).toBe(false);
-		expect(isCloudAgentsEnabled()).toBe(false);
-	});
-
-	it("does not enable a boolean rollout from a truthy variant payload", async () => {
-		const { isCloudAgentsAvailable } = await import("./feature-flags");
-		mocks.getFlagPayload.mockReturnValue("control");
-		expect(isCloudAgentsAvailable()).toBe(false);
-		expect(mocks.getBooleanFlagEnabled).toHaveBeenCalledWith(
-			"code-cloud-agents",
-		);
-	});
-
-	it("needs both the rollout flag and the user's opt-in to enable", async () => {
-		const { isCloudAgentsEnabled, isCloudAgentsAvailable } = await import(
-			"./feature-flags"
-		);
-		const { setCloudSessionsEnabled } = await import("./desktop-settings");
-		mocks.getBooleanFlagEnabled.mockImplementation(
-			(flag: unknown) => flag === "code-cloud-agents",
-		);
-		expect(isCloudAgentsAvailable()).toBe(true);
-		setCloudSessionsEnabled(false);
-		expect(isCloudAgentsEnabled()).toBe(false);
-		setCloudSessionsEnabled(true);
-		expect(isCloudAgentsEnabled()).toBe(true);
-	});
-
-	it("lets the env override force the gate in both directions", async () => {
-		const { isCloudAgentsEnabled, isCloudAgentsAvailable } = await import(
-			"./feature-flags"
-		);
-		mocks.getFlagPayload.mockReturnValue(undefined);
-		process.env.CLINE_CODE_CLOUD_AGENTS = "1";
-		expect(isCloudAgentsAvailable()).toBe(true);
-		expect(isCloudAgentsEnabled()).toBe(true);
-		process.env.CLINE_CODE_CLOUD_AGENTS = "0";
-		expect(isCloudAgentsEnabled()).toBe(false);
+		await disposeDesktopFeatureFlagsService();
+		expect(getDesktopFeatureFlagsService()).not.toBe(first);
+		expect(mocks.posthog).not.toHaveBeenCalled();
 	});
 });

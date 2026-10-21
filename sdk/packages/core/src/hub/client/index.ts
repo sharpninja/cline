@@ -1,6 +1,7 @@
 import {
 	createSessionId,
 	ensureLoopbackProxyBypass,
+	getRequiredHubPeerIdentity,
 	type HubClientRegistration,
 	type HubCommandEnvelope,
 	type HubEventEnvelope,
@@ -30,6 +31,8 @@ import {
 	resolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext,
 } from "../discovery/workspace";
+
+import { verifyHubPeerIdentity } from "../peer-identity";
 
 type PendingReply = {
 	resolve: (reply: HubReplyEnvelope) => void;
@@ -556,6 +559,10 @@ export class NodeHubClient {
 			throw error;
 		}
 
+		if (getRequiredHubPeerIdentity())
+			await verifyHubPeerIdentity(url.toString(), authToken);
+		if (generation !== this.connectGeneration || this.closedByClient)
+			throw this.lastCloseError;
 		const socket = headers
 			? (new NodeWebSocket(url.toString(), {
 					headers: { ...headers },
@@ -1374,6 +1381,7 @@ export async function requestHubDrain(
 	} else if (parsed.protocol === "wss:") {
 		parsed.protocol = "https:";
 	}
+	await verifyHubPeerIdentity(url, resolvedAuthToken);
 	parsed.pathname = "/drain";
 	parsed.hash = "";
 	if (reason) {
@@ -1383,6 +1391,7 @@ export async function requestHubDrain(
 		parsed.searchParams.set("off", "1");
 	}
 	const response = await fetch(parsed, {
+		redirect: "error",
 		method: "POST",
 		headers: resolvedAuthToken
 			? { authorization: `Bearer ${resolvedAuthToken}` }
@@ -1404,9 +1413,11 @@ export async function requestHubShutdown(
 	} else if (parsed.protocol === "wss:") {
 		parsed.protocol = "https:";
 	}
+	await verifyHubPeerIdentity(url, resolvedAuthToken);
 	parsed.pathname = "/shutdown";
 	parsed.hash = "";
 	const response = await fetch(parsed, {
+		redirect: "error",
 		method: "POST",
 		headers: resolvedAuthToken
 			? { authorization: `Bearer ${resolvedAuthToken}` }

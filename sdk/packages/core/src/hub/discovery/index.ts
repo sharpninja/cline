@@ -4,12 +4,20 @@ import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	ensureLoopbackProxyBypass,
+	getHubNamespace,
+	getRequiredHubPeerIdentity,
 	type HubCompatibilityResult,
 	type HubProtocolMetadata,
 	isHubProtocolCompatible,
 } from "@cline/shared";
-import { resolveClineDataDir, resolveClineDir } from "@cline/shared/storage";
+import {
+	resolveClineDataDir,
+	resolveClineDir,
+	validateStoragePath,
+} from "@cline/shared/storage";
 import corePackage from "../../../package.json";
+
+import { readVerifiedHubStatus } from "../peer-identity";
 
 declare const __CLINE_CORE_RUNTIME_BUILD_ID__: string | undefined;
 declare const __CLINE_CORE_RUNTIME_BUILD_EPOCH_MS__: number | undefined;
@@ -93,7 +101,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function getHubLockDir(lockBasis: string): string {
-	return `${lockBasis}.lock`;
+	return validateStoragePath(`${lockBasis}.lock`);
 }
 
 async function readHubLockRecord(
@@ -101,7 +109,7 @@ async function readHubLockRecord(
 ): Promise<{ pid: number; acquiredAt: string } | undefined> {
 	try {
 		const parsed = JSON.parse(
-			await readFile(join(lockDir, "owner.json"), "utf8"),
+			await readFile(validateStoragePath(join(lockDir, "owner.json")), "utf8"),
 		) as Partial<{ pid: number; acquiredAt: string }>;
 		if (
 			typeof parsed.pid !== "number" ||
@@ -116,11 +124,16 @@ async function readHubLockRecord(
 }
 
 async function removeHubLock(lockDir: string): Promise<void> {
-	await rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+	await rm(validateStoragePath(lockDir), {
+		recursive: true,
+		force: true,
+	}).catch(() => undefined);
 }
 
 export function resolveHubBuildId(): string {
-	const configured = process.env[HUB_BUILD_ID_ENV]?.trim();
+	const configured = getHubNamespace()
+		? undefined
+		: process.env[HUB_BUILD_ID_ENV]?.trim();
 	if (configured) {
 		return configured;
 	}
@@ -138,7 +151,9 @@ export function resolveHubBuildId(): string {
  * running from unbundled sources, where no meaningful ordering exists.
  */
 export function resolveHubBuildEpochMs(): number | undefined {
-	const configured = Number(process.env[HUB_BUILD_EPOCH_ENV]);
+	const configured = getHubNamespace()
+		? NaN
+		: Number(process.env[HUB_BUILD_EPOCH_ENV]);
 	if (Number.isFinite(configured) && configured > 0) {
 		return configured;
 	}
@@ -322,19 +337,25 @@ export function isManagedHubReusable(
 	return compareHubBuilds(self, record) <= 0;
 }
 
+/** Apply the host-selected discovery control and its storage validator. */
+export function resolveHubDiscoveryPath(fallbackPath: string): string {
+	const variable = getHubNamespace()?.discoveryVariable ?? HUB_DISCOVERY_ENV;
+	return validateStoragePath(process.env[variable]?.trim() || fallbackPath);
+}
+
 export function resolveHubOwnerContext(
 	ownerBasis: string = process.argv[1]?.trim() || process.cwd(),
 ): HubOwnerContext {
 	const ownerId = `hub-${hashValue(ownerBasis)}`;
-	const discoveryPath =
-		process.env[HUB_DISCOVERY_ENV]?.trim() ||
+	const discoveryPath = resolveHubDiscoveryPath(
 		join(
 			resolveClineDataDir(),
 			"locks",
 			"hub",
 			"owners",
 			`${sanitizeKey(ownerId)}.json`,
-		);
+		),
+	);
 	return { ownerId, discoveryPath };
 }
 
@@ -347,6 +368,7 @@ export function createInMemoryHubOwnerContext(
 export async function readHubDiscovery(
 	discoveryPath: string,
 ): Promise<HubServerDiscoveryRecord | undefined> {
+	discoveryPath = validateStoragePath(discoveryPath);
 	try {
 		const parsed = JSON.parse(
 			await readFile(discoveryPath, "utf8"),
@@ -404,6 +426,7 @@ export async function writeHubDiscovery(
 	discoveryPath: string,
 	record: HubServerDiscoveryRecord,
 ): Promise<void> {
+	discoveryPath = validateStoragePath(discoveryPath);
 	await withHubDiscoveryMutationLock(discoveryPath, async () => {
 		const directory = dirname(discoveryPath);
 		await mkdir(directory, { recursive: true });
@@ -442,6 +465,7 @@ export async function writeHubDiscovery(
 }
 
 export async function clearHubDiscovery(discoveryPath: string): Promise<void> {
+	discoveryPath = validateStoragePath(discoveryPath);
 	await withHubDiscoveryMutationLock(discoveryPath, async () => {
 		await rm(discoveryPath, { force: true }).catch(() => undefined);
 	});
@@ -451,6 +475,7 @@ export async function clearHubDiscoveryIfOwned(
 	discoveryPath: string,
 	hubId: string,
 ): Promise<boolean> {
+	discoveryPath = validateStoragePath(discoveryPath);
 	return await withHubDiscoveryMutationLock(discoveryPath, async () => {
 		const current = await readHubDiscovery(discoveryPath);
 		if (current?.hubId !== hubId) {
@@ -507,7 +532,7 @@ async function withHubLock<T>(
 
 		try {
 			await writeFile(
-				join(lockDir, "owner.json"),
+				validateStoragePath(join(lockDir, "owner.json")),
 				`${JSON.stringify(
 					{ pid: process.pid, acquiredAt: new Date().toISOString() },
 					null,
@@ -544,29 +569,52 @@ export async function probeHubServer(
 	url: string,
 	options?: { authToken?: string; signal?: AbortSignal },
 ): Promise<HubServerProbeRecord | undefined> {
+	const governed = !!getRequiredHubPeerIdentity();
+	const verifiedStatus = await readVerifiedHubStatus(
+		url,
+		options?.authToken,
+		options?.signal,
+	);
 	// Idempotent; repeated here so every embedder of the hub client is covered.
 	ensureLoopbackProxyBypass();
 	try {
-		const response = await fetch(
-			options?.authToken ? toHubStatusUrl(url) : toHubHealthUrl(url),
-			{
-				headers: options?.authToken
-					? { authorization: `Bearer ${options.authToken}` }
-					: undefined,
-				signal: options?.signal,
-			},
-		);
-		if (!response.ok) {
-			return undefined;
-		}
-		const parsed = (await response.json()) as Partial<HubServerProbeRecord>;
+		const response = governed
+			? undefined
+			: await fetch(
+					options?.authToken ? toHubStatusUrl(url) : toHubHealthUrl(url),
+					{
+						headers: options?.authToken
+							? { authorization: `Bearer ${options.authToken}` }
+							: undefined,
+						signal: options?.signal,
+					},
+				);
+		if (response && !response.ok) return undefined;
+		const parsed = (
+			governed ? verifiedStatus : await response!.json()
+		) as Partial<HubServerProbeRecord>;
 		if (
 			typeof parsed.protocolVersion !== "string" ||
 			typeof parsed.host !== "string" ||
 			typeof parsed.port !== "number" ||
 			typeof parsed.url !== "string"
 		) {
+			if (governed) throw new Error("malformed status");
 			return undefined;
+		}
+		if (governed) {
+			const requested = new URL(url);
+			requested.search = "";
+			requested.hash = "";
+			if (
+				parsed.url !== requested.toString() ||
+				!Number.isInteger(parsed.port) ||
+				parsed.port < 1 ||
+				parsed.port > 65535 ||
+				typeof parsed.hubId !== "string" ||
+				!parsed.hubId.trim()
+			)
+				throw new Error("invalid status authority");
 		}
 		return {
 			protocolVersion: parsed.protocolVersion,
@@ -595,8 +643,11 @@ export async function probeHubServer(
 			port: parsed.port,
 			url: parsed.url,
 			hubId: typeof parsed.hubId === "string" ? parsed.hubId : undefined,
-			authToken:
-				typeof parsed.authToken === "string" ? parsed.authToken : undefined,
+			authToken: governed
+				? options?.authToken
+				: typeof parsed.authToken === "string"
+					? parsed.authToken
+					: undefined,
 			pid: typeof parsed.pid === "number" ? parsed.pid : undefined,
 			startedAt:
 				typeof parsed.startedAt === "string" ? parsed.startedAt : undefined,
@@ -604,6 +655,10 @@ export async function probeHubServer(
 				typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
 		};
 	} catch {
+		if (governed)
+			throw new Error(
+				"Governed hub status is malformed or does not match the requested endpoint.",
+			);
 		return undefined;
 	}
 }

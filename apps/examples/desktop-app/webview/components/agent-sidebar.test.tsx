@@ -947,55 +947,10 @@ describe("AgentSidebar session organization", () => {
 		expect(loadOlderSessions).toHaveBeenCalledOnce();
 	});
 
-	it("shows the signed-in account and active organization in the footer", async () => {
+	it("keeps the footer account-free and preserves Settings navigation", async () => {
 		invoke.mockResolvedValue(signedInUser);
-
-		await act(async () => {
-			root.render(
-				<AccountProvider>
-					<SidebarProvider>
-						<AgentSidebar
-							activeSessionId={null}
-							onHome={vi.fn()}
-							onSettingsSectionChange={vi.fn()}
-							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={vi.fn()}
-							settingsSection="General"
-							view="chat"
-						/>
-					</SidebarProvider>
-				</AccountProvider>,
-			);
-		});
-
-		await vi.waitFor(() => {
-			expect(container.textContent).toContain("Beatrix");
-			expect(container.textContent).toContain("Cline Bot Inc");
-		});
-		expect(container.textContent).not.toContain("Cline Desktop");
-		expect(container.textContent).not.toContain("Local");
-		const accountButton = container.querySelector(
-			'[aria-label="Account settings"]',
-		);
-		const settingsButton = container.querySelector('[aria-label="Settings"]');
-		expect(accountButton?.parentElement).toBe(settingsButton?.parentElement);
-		expect(settingsButton?.textContent).toBe("");
-		const accountName = [
-			...(accountButton?.querySelectorAll("span") ?? []),
-		].find((element) => element.textContent === "Beatrix");
-		const organizationName = [
-			...(accountButton?.querySelectorAll("span") ?? []),
-		].find((element) => element.textContent === "Cline Bot Inc");
-		expect(accountName?.nextElementSibling).toBe(organizationName);
-		expect(accountName?.parentElement?.className).toContain("flex-col");
-	});
-
-	it("opens the Account settings section when the footer account row is clicked", async () => {
-		const setView = vi.fn();
 		const onSettingsSectionChange = vi.fn();
-		invoke.mockResolvedValue(signedInUser);
-
-		await act(async () => {
+		await act(async () =>
 			root.render(
 				<AccountProvider>
 					<SidebarProvider>
@@ -1004,24 +959,26 @@ describe("AgentSidebar session organization", () => {
 							onHome={vi.fn()}
 							onSettingsSectionChange={onSettingsSectionChange}
 							sessionHistory={makeSessionHistory([], vi.fn())}
-							setView={setView}
+							setView={vi.fn()}
 							settingsSection="General"
 							view="chat"
 						/>
 					</SidebarProvider>
 				</AccountProvider>,
-			);
-		});
-
-		const accountButton = await vi.waitFor(() => {
-			const button = container.querySelector('[aria-label="Account settings"]');
-			expect(button).not.toBeNull();
-			return button;
-		});
-		await click(accountButton as Element);
-
-		expect(onSettingsSectionChange).toHaveBeenCalledWith("Account");
-		expect(setView).not.toHaveBeenCalled();
+			),
+		);
+		expect(container.textContent).not.toContain("Beatrix");
+		expect(container.textContent).not.toContain("Cline Bot Inc");
+		expect(
+			container.querySelector('[aria-label="Account settings"]'),
+		).toBeNull();
+		expect(
+			invoke.mock.calls.filter(([command]) => command === "cline_account"),
+		).toEqual([]);
+		const settings = container.querySelector('[aria-label="Settings"]');
+		expect(settings).not.toBeNull();
+		await click(settings as Element);
+		expect(onSettingsSectionChange).toHaveBeenCalledWith("General");
 	});
 
 	it("opens the General settings section from the gear in any section", async () => {
@@ -1053,14 +1010,12 @@ describe("AgentSidebar session organization", () => {
 			});
 		};
 
-		// The Account screen leaves the gear un-highlighted, but clicking it
+		// With accounts disabled, the Settings footer covers every section; clicking it
 		// still navigates to General rather than acting as a no-op.
 		// (split on spaces: the variant's hover:bg-surface-hover would match a
 		// plain substring check)
 		const gearOnAccount = await renderSidebar("Account");
-		expect(gearOnAccount.className.split(" ")).not.toContain(
-			"bg-surface-hover",
-		);
+		expect(gearOnAccount.className.split(" ")).toContain("bg-surface-hover");
 		await click(gearOnAccount);
 		expect(onSettingsSectionChange).toHaveBeenCalledWith("General");
 

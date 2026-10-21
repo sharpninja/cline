@@ -1,3 +1,4 @@
+import { getStorageNamespace, resolveDocumentsClineDirectoryPath, validateStoragePath } from "@cline/shared/storage"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { TaskMetadata } from "@core/context/context-tracking/ContextTrackerTypes"
 import { RemoteConfig } from "@shared/remote-config/schema"
@@ -35,74 +36,38 @@ export const GlobalFileNames = {
 	remoteConfig: (orgId: string) => `remote_config_${orgId}.json`,
 }
 
-/**
- * Returns the cross-platform path to the Cline home directory (~/.cline).
- * This works on macOS, Linux, and Windows:
- * - macOS: /Users/username/.cline
- * - Linux: /home/username/.cline
- * - Windows: C:\Users\username\.cline
- *
- * This is intended to eventually replace ~/Documents/Cline as the global config location.
- */
-function getClineHomePath(): string {
-	return path.join(os.homedir(), ".cline")
-}
-
 export async function ensureTaskDirectoryExists(taskId: string): Promise<string> {
 	return getGlobalStorageDir("tasks", taskId)
 }
 
+/** Resolve governed contributions without consulting or falling back to upstream Documents/Cline. */
+async function ensureContributionDirectory(name: "Rules" | "Workflows" | "MCP" | "Hooks"): Promise<string> {
+	if (getStorageNamespace()) {
+		const dir = validateStoragePath(path.join(resolveDocumentsClineDirectoryPath(), name))
+		await fs.mkdir(validateStoragePath(dir), { recursive: true })
+		return validateStoragePath(dir)
+	}
+	const dir = path.join(await getDocumentsPath(), "Cline", name)
+	try {
+		await fs.mkdir(dir, { recursive: true })
+		return dir
+	} catch {
+		return path.join(os.homedir(), "Documents", "Cline", name)
+	}
+}
+
 export async function ensureRulesDirectoryExists(): Promise<string> {
-	const userDocumentsPath = await getDocumentsPath()
-	const clineRulesDir = path.join(userDocumentsPath, "Cline", "Rules")
-	try {
-		await fs.mkdir(clineRulesDir, { recursive: true })
-	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Rules") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
-	}
-	return clineRulesDir
+	return ensureContributionDirectory("Rules")
 }
-
 export async function ensureWorkflowsDirectoryExists(): Promise<string> {
-	const userDocumentsPath = await getDocumentsPath()
-	const clineWorkflowsDir = path.join(userDocumentsPath, "Cline", "Workflows")
-	try {
-		await fs.mkdir(clineWorkflowsDir, { recursive: true })
-	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Workflows") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
-	}
-	return clineWorkflowsDir
+	return ensureContributionDirectory("Workflows")
 }
-
 export async function ensureMcpServersDirectoryExists(): Promise<string> {
-	const userDocumentsPath = await getDocumentsPath()
-	const mcpServersDir = path.join(userDocumentsPath, "Cline", "MCP")
-	try {
-		await fs.mkdir(mcpServersDir, { recursive: true })
-	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "MCP") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine since this path is only ever used in the system prompt
-	}
-	return mcpServersDir
+	return ensureContributionDirectory("MCP")
 }
-
 export async function ensureHooksDirectoryExists(): Promise<string> {
-	const userDocumentsPath = await getDocumentsPath()
-	const clineHooksDir = path.join(userDocumentsPath, "Cline", "Hooks")
-	try {
-		await fs.mkdir(clineHooksDir, { recursive: true })
-	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Hooks") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
-	}
-	return clineHooksDir
+	return ensureContributionDirectory("Hooks")
 }
-
-/**
- * Returns the global skills directory path (~/.cline/skills) without creating it.
- */
-function getClineSkillsDirectoryPath(): string {
-	return path.join(getClineHomePath(), "skills")
-}
-
 function getAgentSkillsDirectoryPath(): string {
 	return path.join(os.homedir(), ".agents", "skills")
 }
@@ -117,12 +82,12 @@ export async function ensureAgentSkillsDirectoryExists(options: { isGlobal: bool
 		? getAgentSkillsDirectoryPath()
 		: path.join(options.workspacePath ?? "", GlobalFileNames.agentsSkillsDir)
 	try {
-		await fs.mkdir(agentSkillsDir, { recursive: true })
+		await fs.mkdir(validateStoragePath(agentSkillsDir), { recursive: true })
 	} catch (_error) {
 		// Fallback - return the path even if mkdir fails, we'll fail gracefully later
-		return agentSkillsDir
+		return validateStoragePath(agentSkillsDir)
 	}
-	return agentSkillsDir
+	return validateStoragePath(agentSkillsDir)
 }
 
 export async function ensureSettingsDirectoryExists(): Promise<string> {
@@ -136,27 +101,31 @@ export async function ensureSettingsDirectoryExists(): Promise<string> {
  */
 export async function getMcpSettingsFilePath(settingsDirectoryPath: string): Promise<string> {
 	const mcpSettingsFilePath = path.join(settingsDirectoryPath, GlobalFileNames.mcpSettings)
+	validateStoragePath(mcpSettingsFilePath)
 	const tempPath = `${mcpSettingsFilePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`
 	try {
-		await fs.writeFile(tempPath, JSON.stringify({ mcpServers: {} }, null, 2), { encoding: "utf8", flag: "wx" })
+		await fs.writeFile(validateStoragePath(tempPath), JSON.stringify({ mcpServers: {} }, null, 2), {
+			encoding: "utf8",
+			flag: "wx",
+		})
 		// Hard-linking publishes the fully-written temp file without overwriting an
 		// existing settings file. EEXIST means another process won the create race.
-		await fs.link(tempPath, mcpSettingsFilePath)
+		await fs.link(validateStoragePath(tempPath), validateStoragePath(mcpSettingsFilePath))
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
 			throw error
 		}
 	} finally {
-		await fs.unlink(tempPath).catch(() => {})
+		await fs.unlink(validateStoragePath(tempPath)).catch(() => {})
 	}
-	return mcpSettingsFilePath
+	return validateStoragePath(mcpSettingsFilePath)
 }
 
 export async function getSavedApiConversationHistory(taskId: string): Promise<Anthropic.MessageParam[]> {
 	const filePath = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversationHistory)
-	const fileExists = await fileExistsAtPath(filePath)
+	const fileExists = await fileExistsAtPath(validateStoragePath(filePath))
 	if (fileExists) {
-		return JSON.parse(await fs.readFile(filePath, "utf8"))
+		return JSON.parse(await fs.readFile(validateStoragePath(filePath), "utf8"))
 	}
 	return []
 }
@@ -164,11 +133,12 @@ export async function getSavedApiConversationHistory(taskId: string): Promise<An
 export async function getTaskMetadata(taskId: string): Promise<TaskMetadata> {
 	const filePath = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.taskMetadata)
 	try {
-		if (await fileExistsAtPath(filePath)) {
-			return JSON.parse(await fs.readFile(filePath, "utf8"))
+		if (await fileExistsAtPath(validateStoragePath(filePath))) {
+			return JSON.parse(await fs.readFile(validateStoragePath(filePath), "utf8"))
 		}
 	} catch (error) {
 		Logger.error("Failed to read task metadata:", error)
+		if (getStorageNamespace()) throw error
 	}
 	return { files_in_context: [], model_usage: [], environment_history: [] }
 }
@@ -177,9 +147,10 @@ export async function saveTaskMetadata(taskId: string, metadata: TaskMetadata) {
 	try {
 		const taskDir = await ensureTaskDirectoryExists(taskId)
 		const filePath = path.join(taskDir, GlobalFileNames.taskMetadata)
-		await fs.writeFile(filePath, JSON.stringify(metadata, null, 2))
+		await writeStorageJson(filePath, metadata)
 	} catch (error) {
 		Logger.error("Failed to save task metadata:", error)
+		if (getStorageNamespace()) throw error
 	}
 }
 
@@ -187,10 +158,15 @@ export async function ensureCacheDirectoryExists(): Promise<string> {
 	return getGlobalStorageDir("cache")
 }
 
+async function writeStorageJson(filePath: string, value: unknown): Promise<void> {
+	const serialized = JSON.stringify(value, null, 2)
+	await fs.writeFile(validateStoragePath(filePath), serialized)
+}
+
 async function getGlobalStorageDir(...subdirs: string[]) {
 	const fullPath = path.resolve(HostProvider.get().globalStorageFsPath, ...subdirs)
-	await fs.mkdir(fullPath, { recursive: true })
-	return fullPath
+	await fs.mkdir(validateStoragePath(fullPath), { recursive: true })
+	return validateStoragePath(fullPath)
 }
 
 export async function readTaskSettingsFromStorage(taskId: string): Promise<Partial<GlobalState>> {
@@ -198,8 +174,8 @@ export async function readTaskSettingsFromStorage(taskId: string): Promise<Parti
 		const taskDirectoryFilePath = await ensureTaskDirectoryExists(taskId)
 		const settingsFilePath = path.join(taskDirectoryFilePath, "settings.json")
 
-		if (await fileExistsAtPath(settingsFilePath)) {
-			const settingsContent = await fs.readFile(settingsFilePath, "utf8")
+		if (await fileExistsAtPath(validateStoragePath(settingsFilePath))) {
+			const settingsContent = await fs.readFile(validateStoragePath(settingsFilePath), "utf8")
 			return JSON.parse(settingsContent)
 		}
 
@@ -217,13 +193,13 @@ export async function writeTaskSettingsToStorage(taskId: string, settings: Parti
 		const settingsFilePath = path.join(taskDirectoryFilePath, "settings.json")
 
 		let existingSettings = {}
-		if (await fileExistsAtPath(settingsFilePath)) {
-			const existingSettingsContent = await fs.readFile(settingsFilePath, "utf8")
+		if (await fileExistsAtPath(validateStoragePath(settingsFilePath))) {
+			const existingSettingsContent = await fs.readFile(validateStoragePath(settingsFilePath), "utf8")
 			existingSettings = JSON.parse(existingSettingsContent)
 		}
 
 		const updatedSettings = { ...existingSettings, ...settings }
-		await fs.writeFile(settingsFilePath, JSON.stringify(updatedSettings, null, 2))
+		await writeStorageJson(settingsFilePath, updatedSettings)
 	} catch (error) {
 		Logger.error("[Disk] Failed to write task settings:", error)
 		throw error
@@ -233,14 +209,15 @@ export async function writeTaskSettingsToStorage(taskId: string, settings: Parti
 export async function readRemoteConfigFromCache(organizationId: string): Promise<RemoteConfig | undefined> {
 	try {
 		const remoteConfigFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.remoteConfig(organizationId))
-		const fileExists = await fileExistsAtPath(remoteConfigFilePath)
+		const fileExists = await fileExistsAtPath(validateStoragePath(remoteConfigFilePath))
 		if (fileExists) {
-			const fileContents = await fs.readFile(remoteConfigFilePath, "utf8")
+			const fileContents = await fs.readFile(validateStoragePath(remoteConfigFilePath), "utf8")
 			return JSON.parse(fileContents)
 		}
 		return undefined
 	} catch (error) {
 		Logger.error("Failed to read remote config from cache:", error)
+		if (getStorageNamespace()) throw error
 		return undefined
 	}
 }
@@ -248,21 +225,23 @@ export async function readRemoteConfigFromCache(organizationId: string): Promise
 export async function writeRemoteConfigToCache(organizationId: string, config: RemoteConfig): Promise<void> {
 	try {
 		const remoteConfigFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.remoteConfig(organizationId))
-		await fs.writeFile(remoteConfigFilePath, JSON.stringify(config))
+		await writeStorageJson(remoteConfigFilePath, config)
 	} catch (error) {
 		Logger.error("Failed to write remote config to cache:", error)
+		if (getStorageNamespace()) throw error
 	}
 }
 
 export async function deleteRemoteConfigFromCache(organizationId: string): Promise<void> {
 	try {
 		const remoteConfigFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.remoteConfig(organizationId))
-		const fileExists = await fileExistsAtPath(remoteConfigFilePath)
+		const fileExists = await fileExistsAtPath(validateStoragePath(remoteConfigFilePath))
 		if (fileExists) {
-			await fs.unlink(remoteConfigFilePath)
+			await fs.unlink(validateStoragePath(remoteConfigFilePath))
 		}
 	} catch (error) {
 		Logger.error("Failed to delete remote config from cache:", error)
+		if (getStorageNamespace()) throw error
 	}
 }
 
@@ -272,7 +251,7 @@ export async function deleteRemoteConfigFromCache(organizationId: string): Promi
  */
 async function getGlobalHooksDir(): Promise<string | undefined> {
 	const globalHooksDir = await ensureHooksDirectoryExists()
-	return (await isDirectory(globalHooksDir)) ? globalHooksDir : undefined
+	return (await isDirectory(validateStoragePath(globalHooksDir))) ? validateStoragePath(globalHooksDir) : undefined
 }
 
 let runtimeHooksDir: string | undefined
@@ -283,6 +262,7 @@ let runtimeHooksDir: string | undefined
  * when discovering hooks.
  */
 export function setRuntimeHooksDir(dir: string | undefined): void {
+	if (dir !== undefined) validateStoragePath(dir)
 	runtimeHooksDir = dir
 }
 
@@ -301,8 +281,8 @@ export async function getAllHooksDirs(workspaceRootPaths?: string[]): Promise<st
 	const hooksDirs: string[] = []
 
 	// Add runtime hooks directory (set by --hooks-dir CLI flag)
-	if (runtimeHooksDir && (await isDirectory(runtimeHooksDir))) {
-		hooksDirs.push(runtimeHooksDir)
+	if (runtimeHooksDir && (await isDirectory(validateStoragePath(runtimeHooksDir)))) {
+		hooksDirs.push(validateStoragePath(runtimeHooksDir))
 	}
 
 	// Add global hooks directory (if it exists)
@@ -350,7 +330,7 @@ export async function getWorkspaceHooksDirs(workspaceRootPaths?: string[]): Prom
 			workspaceRootPaths.map(async (workspaceRootPath) => {
 				// Look for a .clinerules/hooks folder in this workspace root.
 				const candidate = path.join(workspaceRootPath, GlobalFileNames.hooksDir)
-				return (await isDirectory(candidate)) ? candidate : undefined
+				return (await isDirectory(validateStoragePath(candidate))) ? validateStoragePath(candidate) : undefined
 			}),
 		)
 	).filter((path): path is string => Boolean(path))

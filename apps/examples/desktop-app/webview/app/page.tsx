@@ -1,9 +1,6 @@
 "use client";
 
-import {
-	CLINE_DEFAULT_MODEL_ID,
-	type ProviderAuthInfo,
-} from "@cline/shared/browser";
+import type { ProviderAuthInfo } from "@cline/shared/browser";
 import { AttachmentDropZone } from "@cline/ui";
 import { Loader2, LoaderCircle } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -51,7 +48,7 @@ import {
 	WindowTitleBarContent,
 	WindowTitleBarProvider,
 } from "@/components/window-title-bar";
-import { AccountProvider, useAccount } from "@/contexts/account-context";
+import { AccountProvider } from "@/contexts/account-context";
 import { WorkspaceProvider } from "@/contexts/workspace-context";
 import { getInitialChatConfig } from "@/hooks/chat-session/constants";
 import type { ProcessContext } from "@/hooks/chat-session/types";
@@ -65,19 +62,19 @@ import { toast } from "@/hooks/use-toast";
 import { applyAppZoomAction, syncAppFontSize } from "@/lib/app-font-size";
 import { syncAppIcon } from "@/lib/app-icon";
 import type { ChatSessionConfig } from "@/lib/chat-schema";
-import { openPersonalGitHubInstallUrl } from "@/lib/cline-integrations";
-import { cloudRepositoryLabel } from "@/lib/cloud-repositories";
 import {
-	humanizeCloudSessionError,
-	parseCloudSessionError,
-} from "@/lib/cloud-session-error";
+	applyDesktopExecutionSelection,
+	recoverLocalDesktopConfig,
+} from "@/lib/desktop-execution-recovery";
+import { cloudRepositoryLabel } from "@/lib/cloud-repositories";
+import { humanizeCloudSessionError } from "@/lib/cloud-session-error";
 import {
 	createDesktopAppState,
 	type DesktopAppLocation,
 	type DesktopAppView,
 	desktopAppReducer,
 } from "@/lib/desktop-app-state";
-import { desktopClient, openExternalUrl } from "@/lib/desktop-client";
+import { desktopClient } from "@/lib/desktop-client";
 import { watchDesktopNotifications } from "@/lib/desktop-notifications";
 import {
 	subscribeToDesktopActions,
@@ -92,11 +89,7 @@ import {
 } from "@/lib/image-attachments";
 import { createLatestSuccessfulRequestGate } from "@/lib/latest-successful-request";
 import { createLocalEnvironmentSelection } from "@/lib/local-environment-selection";
-import {
-	readModelSelectionStorageFromWindow,
-	writeExecutionTargetToWindow,
-	writeModelSelectionStorageToWindow,
-} from "@/lib/model-selection";
+import { writeExecutionTargetToWindow } from "@/lib/model-selection";
 import {
 	hasCompletedOnboarding,
 	markOnboardingCompleted,
@@ -1014,9 +1007,6 @@ export default function Home() {
 											onOpenModelSettings={() =>
 												handleSettingsSectionChange("Providers")
 											}
-											onOpenAccountSettings={() =>
-												handleSettingsSectionChange("Account")
-											}
 											parentSession={activeParentSession}
 											onThreadStarted={handleThreadStarted}
 										/>
@@ -1122,7 +1112,6 @@ function ChatThreadPane({
 	onOpenSessionById,
 	onOpenSetup,
 	onOpenModelSettings,
-	onOpenAccountSettings,
 	onPickRemoteWorkspaceDirectory,
 	onSelectEnvironment,
 	parentSession,
@@ -1160,7 +1149,6 @@ function ChatThreadPane({
 	onSelectEnvironment: (environmentId: string) => Promise<void>;
 	onOpenSetup?: () => void;
 	onOpenModelSettings?: () => void;
-	onOpenAccountSettings?: () => void;
 	parentSession?: { sessionId: string; title?: string };
 	remoteEnvironment: RemoteWorkspaceEnvironment | null;
 	onThreadStarted?: (threadId: string, sessionId?: string) => void;
@@ -1229,70 +1217,7 @@ function ChatThreadPane({
 	// Branch name, "no-git" once the folder is confirmed to not be a git
 	// repository, or null while branch discovery is pending.
 	const [gitBranch, setGitBranch] = useState<string | null>(null);
-	// Wait for the flag before falling back from remembered Cloud to Local.
-	const [cloudAgentsFlagEnabled, setCloudAgentsFlagEnabled] = useState<
-		boolean | null
-	>(null);
-	const cloudAgentsEnabled =
-		cloudAgentsFlagEnabled === true &&
-		environmentId === LOCAL_WORKSPACE_ENVIRONMENT_ID;
-	const { user: accountUser, activeOrganization } = useAccount();
-	const accountUserId = accountUser?.id ?? null;
-	const openGitHubConnect = useCallback(
-		async (fallbackUrl: string) => {
-			if (activeOrganization) {
-				await openExternalUrl(fallbackUrl);
-				return;
-			}
-			await openPersonalGitHubInstallUrl(fallbackUrl);
-		},
-		[activeOrganization],
-	);
-	useEffect(() => {
-		void accountUserId;
-		let cancelled = false;
-		let retryTimer: number | undefined;
-		let attempts = 0;
-		const fetchFlags = () => {
-			desktopClient
-				.invoke("get_feature_flags", {})
-				.then((flags) => {
-					if (!cancelled) {
-						setCloudAgentsFlagEnabled(
-							Boolean((flags as { cloudAgents?: boolean })?.cloudAgents),
-						);
-					}
-				})
-				.catch(() => {
-					attempts += 1;
-					if (cancelled) {
-						return;
-					}
-					if (attempts < 10) {
-						retryTimer = window.setTimeout(fetchFlags, 2_000);
-					} else {
-						setCloudAgentsFlagEnabled(false);
-					}
-				});
-		};
-		fetchFlags();
-		// Reflect Settings changes without restarting or switching accounts.
-		const unsubscribe = desktopClient.subscribe(
-			"feature_flags_changed",
-			(payload) => {
-				if (!cancelled) {
-					setCloudAgentsFlagEnabled(
-						Boolean((payload as { cloudAgents?: boolean })?.cloudAgents),
-					);
-				}
-			},
-		);
-		return () => {
-			cancelled = true;
-			unsubscribe();
-			if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-		};
-	}, [accountUserId]);
+	const cloudAgentsEnabled = false;
 	// Worktrees are cut by the local sidecar's git, so they are only offered
 	// for the local environment. The choice also only holds while the
 	// workspace is a git repo; a plain folder (or pending discovery) silently
@@ -1396,7 +1321,7 @@ function ChatThreadPane({
 	// Threads opened on Cloud have no captured Local config.
 	const localConfigRef = useRef<Pick<
 		ChatSessionConfig,
-		"provider" | "model" | "apiKey" | "workspaceRoot" | "cwd"
+		"provider" | "model" | "apiKey" | "providerAuth" | "workspaceRoot" | "cwd"
 	> | null>(
 		config.executionTarget === "cloud"
 			? null
@@ -1404,6 +1329,7 @@ function ChatThreadPane({
 					provider: config.provider,
 					model: config.model,
 					apiKey: config.apiKey,
+					providerAuth: config.providerAuth,
 					workspaceRoot: config.workspaceRoot,
 					cwd: config.cwd,
 				},
@@ -2047,14 +1973,8 @@ function ChatThreadPane({
 		openForkedSession(result);
 	}, [forkSession, openForkedSession]);
 	const handleFixCredentials = useCallback(
-		(target: "account" | "models") => {
-			if (target === "account") {
-				onOpenAccountSettings?.();
-			} else {
-				onOpenModelSettings?.();
-			}
-		},
-		[onOpenAccountSettings, onOpenModelSettings],
+		(_target: "account" | "models") => onOpenModelSettings?.(),
+		[onOpenModelSettings],
 	);
 
 	const handleEditMessage = useCallback(
@@ -2149,100 +2069,46 @@ function ChatThreadPane({
 		setPromptInput,
 	]);
 
-	const handleExecutionTargetChange = useCallback(
-		(target: "local" | "cloud") => {
-			if (target === "cloud" && !cloudAgentsEnabled) {
-				return;
-			}
-			setConfig((prev) => {
-				if (target === prev.executionTarget) return prev;
-				if (target === "cloud") {
-					localConfigRef.current = {
-						provider: prev.provider,
-						model: prev.model,
-						apiKey: prev.apiKey,
-						workspaceRoot: prev.workspaceRoot,
-						cwd: prev.cwd,
-					};
-					const remembered = readModelSelectionStorageFromWindow("cloud");
-					return {
-						...prev,
-						executionTarget: "cloud",
-						provider: "cline",
-						model:
-							remembered.lastModelByProvider.cline ||
-							(prev.provider === "cline" ? prev.model : CLINE_DEFAULT_MODEL_ID),
-						apiKey: providerCredentials.cline?.apiKey ?? "",
-						workspaceRoot: "",
-						cwd: "",
-					};
-				}
-				const captured = localConfigRef.current;
-				const local =
-					captured ??
-					getInitialChatConfig(environmentId, { executionTarget: "local" });
-				return {
-					...prev,
-					provider: local.provider,
-					model: local.model,
-					apiKey: local.apiKey,
-					// Prefer a validated workspace; retain the saved path while discovery
-					// is pending so persistence does not overwrite it with an empty value.
-					workspaceRoot:
-						captured?.workspaceRoot ||
-						prev.workspaceRoot ||
-						local.workspaceRoot,
-					cwd: captured?.cwd || prev.cwd || local.cwd,
-					executionTarget: "local",
-					repoUrl: undefined,
-					branch: undefined,
-				};
-			});
-			if (target === "cloud") {
-				setPendingAttachments([]);
-				setShowDiffView(false);
-			}
-		},
+	const handleSelectExecutionTarget = useCallback(
+		(target: "local" | "cloud", selectedEnvironmentId?: string) =>
+			applyDesktopExecutionSelection({
+				target,
+				environmentChanged:
+					selectedEnvironmentId !== undefined &&
+					selectedEnvironmentId !== environmentId,
+				hasHostedSession:
+					historySession?.origin === "cloud" ||
+					(config.executionTarget === "cloud" && Boolean(sessionId)),
+				persistLocal: () => writeExecutionTargetToWindow("local"),
+				startNewSession: onNewThread,
+				reportBlocked: (description) =>
+					toast({
+						variant: "destructive",
+						title: "Choose direct execution",
+						description,
+					}),
+				changeToLocal: () =>
+					setConfig((previous) =>
+						previous.executionTarget === "local"
+							? previous
+							: recoverLocalDesktopConfig(
+									previous,
+									localConfigRef.current ??
+										getInitialChatConfig(environmentId, {
+											executionTarget: "local",
+										}),
+								),
+					),
+			}),
 		[
+			config.executionTarget,
 			environmentId,
-			providerCredentials.cline?.apiKey,
+			historySession?.origin,
+			onNewThread,
+			sessionId,
 			setConfig,
-			cloudAgentsEnabled,
-			setPendingAttachments,
 		],
 	);
-	// Automatic fallbacks must not overwrite the user's preference.
-	const handleSelectExecutionTarget = useCallback(
-		(target: "local" | "cloud") => {
-			if (target === "cloud" && !cloudAgentsEnabled) {
-				return;
-			}
-			writeExecutionTargetToWindow(target);
-			handleExecutionTargetChange(target);
-		},
-		[cloudAgentsEnabled, handleExecutionTargetChange],
-	);
-
-	// Reset only new composers when the flag turns off; existing sessions attach.
-	useEffect(() => {
-		if (
-			cloudAgentsFlagEnabled !== null &&
-			!cloudAgentsEnabled &&
-			config.executionTarget === "cloud" &&
-			!historySession &&
-			!sessionId
-		) {
-			handleExecutionTargetChange("local");
-		}
-	}, [
-		cloudAgentsEnabled,
-		cloudAgentsFlagEnabled,
-		config.executionTarget,
-		historySession,
-		handleExecutionTargetChange,
-		sessionId,
-	]);
-
 	const handleCloudRepoUrlChange = useCallback(
 		(repoUrl: string) => {
 			setConfig((prev) =>
@@ -2286,25 +2152,13 @@ function ChatThreadPane({
 	}, [abort]);
 	const handleModelChange = useCallback(
 		(nextModel: string) => {
-			// The shared model picker only persists Local selections.
-			if (config.executionTarget === "cloud") {
-				try {
-					writeModelSelectionStorageToWindow(
-						{
-							lastProvider: "cline",
-							lastModelByProvider: { cline: nextModel },
-						},
-						"cloud",
-					);
-				} catch {
-					// Ignore localStorage persistence failures.
-				}
-			}
-			setConfig((prev) =>
-				prev.model === nextModel ? prev : { ...prev, model: nextModel },
+			setConfig((previous) =>
+				previous.executionTarget === "cloud" || previous.model === nextModel
+					? previous
+					: { ...previous, model: nextModel },
 			);
 		},
-		[config.executionTarget, setConfig],
+		[setConfig],
 	);
 	const handleModeToggle = useCallback(
 		() =>
@@ -2372,9 +2226,7 @@ function ChatThreadPane({
 		: (sessionId ?? visibleHistorySession?.sessionId ?? null);
 	const displayedMessages = hideDeletedSessionUi ? [] : messages;
 	const displayedError = hideDeletedSessionUi ? null : error;
-	const cloudSessionError = isCloudSession
-		? parseCloudSessionError(displayedError)
-		: null;
+
 	const importedFromTool = readImportedFromTool(
 		visibleHistorySession?.metadata,
 	);
@@ -2571,11 +2423,6 @@ function ChatThreadPane({
 		/>
 	);
 
-	const cloudConnectUrl =
-		cloudSessionError?.code === "github_not_connected"
-			? cloudSessionError.connectUrl
-			: undefined;
-
 	return (
 		<WorkspaceProvider value={workspaceContextValue}>
 			{/* Requires `dragDropEnabled: false` on the Tauri window so the native shell does not swallow OS file drags. */}
@@ -2642,14 +2489,10 @@ function ChatThreadPane({
 								onRejectToolApproval={handleRejectToolApproval}
 								chatTransportState={chatTransportState}
 								activityLabel={activityLabel}
-								error={cloudSessionError?.message ?? displayedError}
-								errorAction={
-									cloudConnectUrl
-										? {
-												label: "Connect GitHub",
-												onClick: () => openGitHubConnect(cloudConnectUrl),
-											}
-										: undefined
+								error={
+									isCloudSession
+										? "Hosted sessions are unavailable. Start a new Local or SSH session and choose a direct provider in Settings."
+										: displayedError
 								}
 								importedFromTool={importedFromTool}
 								messages={displayedMessages}
@@ -2713,11 +2556,7 @@ function ChatThreadPane({
 					cloudBranch={config.branch ?? ""}
 					onRepoUrlChange={handleCloudRepoUrlChange}
 					onCloudBranchChange={handleCloudBranchChange}
-					cloudAgentsEnabled={
-						cloudAgentsEnabled ||
-						(cloudAgentsFlagEnabled === null &&
-							config.executionTarget === "cloud")
-					}
+					cloudAgentsEnabled={false}
 					onWorkInChange={canWorkInWorktree ? setWorkIn : undefined}
 					workIn={workIn}
 				/>

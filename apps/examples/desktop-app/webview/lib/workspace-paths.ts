@@ -1,7 +1,7 @@
 import { isChatWorkspacePath } from "@cline/shared/browser";
 
 export const WORKSPACE_SELECTION_STORAGE_KEY =
-	"cline.code.workspace-selection.v2";
+	"cline-qb.code.workspace-selection.v2";
 
 export const LOCAL_WORKSPACE_ENVIRONMENT_ID = "local";
 

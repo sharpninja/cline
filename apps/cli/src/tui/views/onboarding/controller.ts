@@ -17,12 +17,16 @@ import {
 	getIndividualPlanFeatures,
 } from "../../../utils/cline-pass-errors";
 import {
+	assertDirectProvider,
+	CLINE_ACCOUNT_DISABLED_MESSAGE,
+	isClineCloudProvider,
+} from "../../../utils/cloud-policy";
+import {
 	checkLocalCliInstalled,
 	getLocalCliInfo,
 	type LocalCliStatus,
 	type ProviderLocalCli,
 } from "../../../utils/local-cli";
-import open from "../../../utils/open";
 import { getPersistedProviderApiKey } from "../../../utils/provider-auth";
 import { listLocalProviders } from "../../../utils/provider-catalog";
 import { getCliTelemetryService } from "../../../utils/telemetry";
@@ -93,9 +97,9 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 	);
 	const menuOptions = useMemo(
 		() =>
-			getMainMenuOptions({
-				isClinePassEnabled: true,
-			}),
+			getMainMenuOptions().filter(
+				(option) => !isClineCloudProvider(option.value),
+			),
 		[],
 	);
 	const [step, setStep] = useState<OnboardingStep>("menu");
@@ -227,29 +231,7 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 		[recommended.data, activeProviderId],
 	);
 	const [clineModelSelected, setClineModelSelected] = useState(0);
-	const [clineModelReasoningIds, setClineModelReasoningIds] = useState<
-		Set<string>
-	>(new Set());
-
-	useEffect(() => {
-		// The featured picker serves both cline and cline-pass, so pool
-		// reasoning support from both catalogs. Display names need no catalog
-		// here: fetchClineRecommendedModels resolves them.
-		void Promise.allSettled(
-			["cline", "cline-pass"].map((providerId) =>
-				getLocalProviderModels(providerId),
-			),
-		).then((results) => {
-			const ids = new Set<string>();
-			for (const result of results) {
-				if (result.status !== "fulfilled") continue;
-				for (const m of result.value.models.filter(isChatProviderModel)) {
-					if (m.supportsReasoning) ids.add(m.id);
-				}
-			}
-			setClineModelReasoningIds(ids);
-		});
-	}, []);
+	const [clineModelReasoningIds] = useState<Set<string>>(new Set());
 
 	// Thinking level
 	const [thinkingSelected, setThinkingSelected] = useState(
@@ -264,6 +246,7 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 
 	const loadModelsForProvider = useCallback(
 		(providerId: string) => {
+			assertDirectProvider(providerId);
 			setModelsLoading(true);
 			setModelEntries([]);
 			refreshProviderModelsFromSource(providerSettingsManager, providerId)
@@ -362,6 +345,7 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 
 	const transitionToModelPicker = useCallback(
 		(providerId: string) => {
+			assertDirectProvider(providerId);
 			setActiveProviderId(providerId);
 			const provider = providers.find((p) => p.id === providerId);
 			setActiveProviderName(provider?.name ?? providerId);
@@ -472,19 +456,8 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 	}, [transitionToModelPicker]);
 
 	const openClinePassSubscriptionPage = useCallback(() => {
-		setClinePassSubscriptionOpenStatus("Opening subscription page...");
-		void open(clinePassSubscriptionUrl, { wait: false })
-			.then(() => {
-				setClinePassSubscriptionOpenStatus(
-					"Opened subscription page in your browser.",
-				);
-			})
-			.catch(() => {
-				setClinePassSubscriptionOpenStatus(
-					`Could not open browser automatically. Open ${clinePassSubscriptionUrl}`,
-				);
-			});
-	}, [clinePassSubscriptionUrl]);
+		setClinePassSubscriptionOpenStatus(CLINE_ACCOUNT_DISABLED_MESSAGE);
+	}, []);
 
 	useEffect(() => {
 		if (
@@ -516,6 +489,7 @@ export function useOnboardingController(props: OnboardingControllerProps) {
 
 	const selectProvider = useCallback(
 		(providerId: string) => {
+			assertDirectProvider(providerId);
 			const provider = providers.find((p) => p.id === providerId);
 			if (!provider) return;
 			if (provider.isOAuth) {

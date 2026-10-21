@@ -28,14 +28,13 @@ describe("SelfHosted Mode - PostHog Disabling", () => {
 			assert.strictEqual(config.type, "no-op", "Should return no-op type in selfHosted mode")
 		})
 
-		it("should return posthog config when NOT in selfHosted mode (if PostHog config is valid)", () => {
+		it("returns no-op flags outside selfHosted mode too", () => {
 			isSelfHostedStub = sinon.stub(ClineEndpoint, "isSelfHosted").returns(false)
 
 			const config = FeatureFlagsProviderFactory.getDefaultConfig()
 
-			// Will be "posthog" if PostHog config is valid, "no-op" otherwise
-			// The important thing is it's NOT forced to "no-op" by selfHosted check
-			assert.ok(config.type === "posthog" || config.type === "no-op", "Should not be forced to no-op")
+			// Product policy applies independently of the deployment mode.
+			assert.strictEqual(config.type, "no-op", "Hosted flags cannot be enabled in any mode")
 		})
 
 		it("should create NoOp provider when in selfHosted mode", () => {
@@ -58,12 +57,12 @@ describe("SelfHosted Mode - PostHog Disabling", () => {
 			assert.strictEqual(config.type, "no-op", "Should return no-op type in selfHosted mode")
 		})
 
-		it("should return posthog config when NOT in selfHosted mode", () => {
+		it("returns no-op errors outside selfHosted mode too", () => {
 			isSelfHostedStub = sinon.stub(ClineEndpoint, "isSelfHosted").returns(false)
 
 			const config = ErrorProviderFactory.getDefaultConfig()
 
-			assert.strictEqual(config.type, "posthog", "Should return posthog type when not in selfHosted mode")
+			assert.strictEqual(config.type, "no-op", "No external reporting in any mode")
 		})
 
 		it("should create NoOp provider when in selfHosted mode", async () => {

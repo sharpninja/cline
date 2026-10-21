@@ -1,3 +1,4 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import { CreateHookRequest, CreateHookResponse } from "@shared/proto/cline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -23,14 +24,14 @@ export async function createHook(
 	const hooksDir = await resolveHooksDirectory(isGlobal, workspaceName, globalHooksDirOverride)
 
 	// Ensure directory exists
-	await fs.mkdir(hooksDir, { recursive: true })
+	await fs.mkdir(validateStoragePath(hooksDir), { recursive: true })
 
 	const hookFileName = process.platform === "win32" ? `${hookName}.ps1` : hookName
 	const hookPath = path.join(hooksDir, hookFileName)
 
 	// Check if already exists
 	try {
-		await fs.stat(hookPath)
+		await fs.stat(validateStoragePath(hookPath))
 		throw new Error(`Hook ${hookName} already exists at ${hookPath}`)
 	} catch (error) {
 		// Good - file doesn't exist yet
@@ -45,7 +46,7 @@ export async function createHook(
 	// Write file WITHOUT executable permissions (644) so hook is toggled off by default
 	// User can enable it later when they're ready
 	const mode = 0o644
-	await fs.writeFile(hookPath, templateContent, { mode })
+	await fs.writeFile(validateStoragePath(hookPath), templateContent, { mode, flag: "wx" })
 
 	// Invalidate hook discovery cache
 	await HookDiscoveryCache.getInstance().invalidateAll()

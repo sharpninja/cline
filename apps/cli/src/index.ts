@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import "./utils/storage-bootstrap";
+
 import { isMainThread } from "node:worker_threads";
 import {
 	claimHubDaemonProcess,
@@ -106,15 +108,6 @@ if (!isMainThread) {
 			exitCode = 1;
 		} finally {
 			await disposeAll();
-		}
-		// The explicit process.exit below means beforeExit never fires, so a
-		// startup-recorded auto-update must be applied here, after all runtime
-		// teardown. It spawns detached and only when no other CLI is attached.
-		try {
-			const { applyDeferredUpdate } = await import("./commands/update");
-			await applyDeferredUpdate();
-		} catch {
-			// Best-effort; never block exit on the updater.
 		}
 		process.exit(exitCode || (process.exitCode as number) || 0);
 	})();

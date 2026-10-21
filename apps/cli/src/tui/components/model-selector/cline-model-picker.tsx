@@ -1,11 +1,7 @@
 // @jsxImportSource @opentui/react
 
-import {
-	type ClineRecommendedModelsData,
-	fetchClineRecommendedModels,
-} from "@cline/core";
+import type { ClineRecommendedModelsData } from "@cline/core";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
 import "opentui-spinner/react";
 import { useDialogPalette } from "../../hooks/use-theme";
 import type { DialogPalette } from "../../themes";
@@ -31,25 +27,11 @@ function tagColor(tag: string, palette: DialogPalette): string {
 	return palette.act;
 }
 
-export function useClineRecommendedModels() {
-	const [data, setData] = useState<ClineRecommendedModelsData | null>(null);
-	const [loading, setLoading] = useState(true);
-
-	useEffect(() => {
-		let cancelled = false;
-		fetchClineRecommendedModels()
-			.then((result) => {
-				if (!cancelled) setData(result);
-			})
-			.finally(() => {
-				if (!cancelled) setLoading(false);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, []);
-
-	return { data, loading };
+export function useClineRecommendedModels(): {
+	data: ClineRecommendedModelsData | null;
+	loading: boolean;
+} {
+	return { data: null, loading: false };
 }
 
 export function ClineModelPicker(props: {

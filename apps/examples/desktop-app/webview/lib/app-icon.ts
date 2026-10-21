@@ -1,6 +1,6 @@
 import { desktopClient, isTauriAvailable } from "@/lib/desktop-client";
 
-export const APP_ICON_STORAGE_KEY = "cline.code.app-icon.v1";
+export const APP_ICON_STORAGE_KEY = "cline-qb.code.app-icon.v1";
 
 /**
  * App icon variants selectable in Settings. "midnight" is the icon bundled

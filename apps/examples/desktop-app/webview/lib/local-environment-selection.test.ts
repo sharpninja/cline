@@ -5,12 +5,15 @@ import { getInitialChatConfig } from "@/hooks/chat-session/constants";
 import { createLocalEnvironmentSelection } from "./local-environment-selection";
 import {
 	readExecutionTargetFromWindow,
-	writeExecutionTargetToWindow,
+	EXECUTION_TARGET_STORAGE_KEY,
 } from "./model-selection";
 
 beforeEach(() => {
 	window.localStorage.clear();
-	writeExecutionTargetToWindow("cloud");
+	window.localStorage.setItem(
+		EXECUTION_TARGET_STORAGE_KEY,
+		JSON.stringify({ target: "cloud" }),
+	);
 });
 
 function deferred() {
@@ -36,7 +39,7 @@ it("waits for an explicit Local switch before mounting a draft when the event ar
 		return disconnect.promise;
 	}, selectDraft);
 	expect(selectDraft).not.toHaveBeenCalled();
-	expect(readExecutionTargetFromWindow()).toBe("cloud");
+	expect(readExecutionTargetFromWindow()).toBe("local");
 	disconnect.resolve();
 	await switched;
 	expect(mountedTargets).toEqual(["local"]);
@@ -56,7 +59,7 @@ it("does not schedule deferred navigation while an explicit switch is pending", 
 	await switched;
 });
 
-it("keeps Cloud remembered after failure and continues handling unsolicited disconnects", async () => {
+it("ignores legacy Cloud after failure and continues handling unsolicited disconnects", async () => {
 	const selection = createLocalEnvironmentSelection();
 	const disconnect = deferred();
 	const selectDraft = vi.fn();
@@ -64,10 +67,10 @@ it("keeps Cloud remembered after failure and continues handling unsolicited disc
 	disconnect.reject(new Error("disconnect failed"));
 	await expect(switched).rejects.toThrow("disconnect failed");
 	expect(selectDraft).not.toHaveBeenCalled();
-	expect(readExecutionTargetFromWindow()).toBe("cloud");
+	expect(readExecutionTargetFromWindow()).toBe("local");
 	selection.onDisconnected(selectDraft);
 	expect(selectDraft).toHaveBeenCalledTimes(1);
-	expect(readExecutionTargetFromWindow()).toBe("cloud");
+	expect(readExecutionTargetFromWindow()).toBe("local");
 });
 
 it("retains event coordination until overlapping explicit switches have both settled", async () => {

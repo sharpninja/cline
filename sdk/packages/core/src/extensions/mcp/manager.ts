@@ -1,4 +1,5 @@
 import {
+	assertUserConfiguredMcp,
 	isMcpTimeoutConfigured,
 	resolveMcpTimeoutSeconds,
 } from "@cline/shared";
@@ -76,14 +77,22 @@ export class InMemoryMcpManager implements McpManager {
 					isMcpTimeoutConfigured(registration.timeoutSeconds) ||
 				resolveMcpTimeoutSeconds(existing.registration.timeoutSeconds) !==
 					resolveMcpTimeoutSeconds(registration.timeoutSeconds);
+			const didProvenanceChange =
+				existing.registration.remoteConfigured !==
+				registration.remoteConfigured;
 			existing.registration = { ...registration };
 			existing.updatedAt = nowMs();
 
-			if (didTransportChange || didTimeoutChange) {
-				await this.disconnectState(existing);
-				existing.client = undefined;
+			if (didTransportChange || didTimeoutChange || didProvenanceChange) {
+				// Invalidate synchronously: readers must not reuse tools while a
+				// transport is closing, including when that close fails.
 				existing.toolCache = undefined;
 				existing.toolCacheUpdatedAt = undefined;
+				try {
+					await this.disconnectState(existing);
+				} finally {
+					existing.client = undefined;
+				}
 			}
 		});
 	}
@@ -143,6 +152,7 @@ export class InMemoryMcpManager implements McpManager {
 
 	async listTools(serverName: string): Promise<readonly McpToolDescriptor[]> {
 		const state = this.requireServer(serverName);
+		assertUserConfiguredMcp(state.registration);
 		const fetchedAt = state.toolCacheUpdatedAt ?? 0;
 		if (state.toolCache && nowMs() - fetchedAt <= this.toolsCacheTtlMs) {
 			return state.toolCache;
@@ -208,6 +218,13 @@ export class InMemoryMcpManager implements McpManager {
 	}
 
 	private async connectState(state: ManagedServerState): Promise<void> {
+		try {
+			assertUserConfiguredMcp(state.registration);
+		} catch (error) {
+			state.lastError = error instanceof Error ? error.message : String(error);
+			state.updatedAt = nowMs();
+			throw error;
+		}
 		if (state.registration.disabled) {
 			throw new Error(
 				`MCP server "${state.registration.name}" is disabled and cannot be connected.`,

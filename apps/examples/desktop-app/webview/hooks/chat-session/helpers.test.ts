@@ -201,9 +201,9 @@ describe("resolveCredentialFailureHint", () => {
 		).toMatch(/`opencode` CLI/);
 	});
 
-	it("points Cline at signing in again from Settings → Account", () => {
+	it("points excluded Cline at direct-provider configuration", () => {
 		expect(resolveCredentialFailureHint("cline")).toBe(
-			"Sign in to Cline again in Settings → Account, then try again.",
+			"Cline account services are unavailable in cline-qb. Configure a direct model provider.",
 		);
 	});
 
@@ -252,10 +252,10 @@ describe("resolveCredentialFailureAction", () => {
 		).toBeNull();
 	});
 
-	it("sends Cline to the Account page and other providers to Models", () => {
+	it("sends excluded and direct providers to Models", () => {
 		expect(resolveCredentialFailureAction("cline")).toEqual({
-			label: "Sign in to Cline",
-			target: "account",
+			label: "Open API providers",
+			target: "models",
 		});
 		expect(
 			resolveCredentialFailureAction("anthropic", { providerId: "anthropic" }),
@@ -311,5 +311,29 @@ describe("extractAssistantTurnDataFromRpcMessages", () => {
 			images: [],
 			media: [],
 		});
+	});
+});
+
+describe("qbrain picker policy: credential recovery", () => {
+	it.each([
+		"cline",
+		"cline-pass",
+		" CLINE-PASS ",
+	])("routes excluded provider %s to direct configuration", (providerId) => {
+		expect(resolveCredentialFailureHint(providerId)).toMatch(
+			/unavailable in cline-qb/,
+		);
+		expect(resolveCredentialFailureAction(providerId)).toEqual({
+			label: "Open API providers",
+			target: "models",
+		});
+	});
+	it.each([
+		"anthropic",
+		"openai-codex",
+	])("never offers Cline fallback for %s", (providerId) => {
+		expect(
+			resolveCredentialFailureHint(providerId, { providerId }),
+		).not.toMatch(/sign in with Cline/i);
 	});
 });

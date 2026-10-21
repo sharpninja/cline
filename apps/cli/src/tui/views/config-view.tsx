@@ -1,4 +1,3 @@
-import { readGlobalSettings, setAutoUpdateEnabledGlobally } from "@cline/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { ChoiceContext } from "@opentui-ui/dialog";
 import { useDialogKeyboard } from "@opentui-ui/dialog/react";
@@ -401,9 +400,6 @@ export function ConfigPanelContent(props: ConfigPanelProps) {
 	const [autoApprove, setAutoApprove] = useState(
 		config.toolPolicies["*"]?.autoApprove !== false,
 	);
-	const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(
-		() => readGlobalSettings().autoUpdateEnabled,
-	);
 	const [verbose, setVerbose] = useState(config.verbose);
 	const [compactionMode, setCompactionMode] = useState(
 		props.currentCompactionMode,
@@ -486,7 +482,6 @@ export function ConfigPanelContent(props: ConfigPanelProps) {
 				id: "auto-approve",
 				label: "Auto-approve all",
 			});
-			r.push({ kind: "toggle", id: "auto-update", label: "Auto update" });
 			r.push({ kind: "toggle", id: "verbose", label: "Verbose" });
 		} else {
 			const activeItems = resolveActiveConfigItems(configData, activeTab);
@@ -633,13 +628,6 @@ export function ConfigPanelContent(props: ConfigPanelProps) {
 					case "auto-approve":
 						setAutoApprove(!autoApprove);
 						props.onToggleAutoApprove();
-						break;
-					case "auto-update":
-						setAutoUpdateEnabled((previous) => {
-							const next = !previous;
-							setAutoUpdateEnabledGlobally(next);
-							return next;
-						});
 						break;
 					case "compaction": {
 						const nextMode = getNextCliCompactionMode(compactionMode);
@@ -849,9 +837,6 @@ export function ConfigPanelContent(props: ConfigPanelProps) {
 						} else if (row.id === "auto-approve") {
 							value = autoApprove ? "● on" : "○ off";
 							valueColor = autoApprove ? palette.success : "gray";
-						} else if (row.id === "auto-update") {
-							value = autoUpdateEnabled ? "● on" : "○ off";
-							valueColor = autoUpdateEnabled ? palette.success : "gray";
 						} else if (row.id === "compaction") {
 							value = formatCliCompactionMode(compactionMode);
 							valueColor = getCompactionModeColor(compactionMode, palette);

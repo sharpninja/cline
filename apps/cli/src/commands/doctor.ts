@@ -10,11 +10,13 @@ import {
 	readSupersededHubDiscovery,
 	resolveProductionHubOwnerContext,
 	resolveSharedHubOwnerContext,
+	retireDiscoveredHub,
 	stopLocalHubServerGracefully,
 } from "@cline/core";
 import {
 	type ActiveConnectorRecord,
 	formatUptime,
+	getHubNamespace,
 	resolveClineBuildEnv,
 	type SupervisedConnectorRecord,
 } from "@cline/shared";
@@ -635,6 +637,41 @@ export async function runDoctorCommand(
 	const jsonOutput = opts.json === true;
 	const fix = opts.fix === true;
 	const verbose = opts.verbose === true;
+	if (fix && getHubNamespace()?.requirePeerIdentity) {
+		// Process names, ports and cached PIDs do not prove product ownership.
+		// The governed repair path uses the authenticated retirement protocol;
+		// it never escalates a trust/connection failure to process-wide cleanup.
+		let stopped = false;
+		let diagnostic: string | undefined;
+		try {
+			const owner = resolveCliHubOwnerContext();
+			const discovery = await readHubDiscovery(owner.discoveryPath);
+			if (discovery?.url) {
+				stopped = await retireDiscoveredHub(discovery, owner.discoveryPath);
+				if (!stopped)
+					diagnostic =
+						"Hub retirement was not confirmed; discovery was preserved.";
+			}
+		} catch {
+			diagnostic =
+				"Authenticated hub retirement failed. Restore hub trust or connectivity and retry.";
+		}
+		if (jsonOutput) {
+			io.writeln(
+				JSON.stringify({
+					repair: "authenticated-hub-retirement",
+					stopped,
+					diagnostic,
+				}),
+			);
+		} else if (!diagnostic) {
+			io.writeln(
+				stopped ? "Governed hub retired." : "No recorded hub to retire.",
+			);
+		}
+		if (diagnostic) io.writeErr(diagnostic);
+		return diagnostic ? 1 : 0;
+	}
 	const before = await collectDoctorStatus(opts.cwd);
 
 	if (!fix) {
@@ -681,7 +718,9 @@ export async function runDoctorCommand(
 			before.staleSidecarPids.length > 0
 		) {
 			io.writeln(
-				"\nRun `cline doctor fix` to kill all stale local processes, including stale sidecars.",
+				getHubNamespace()?.requirePeerIdentity
+					? "\nRun `cline doctor fix` to request authenticated hub retirement. Process-list matches are diagnostic only."
+					: "\nRun `cline doctor fix` to kill all stale local processes, including stale sidecars.",
 			);
 		}
 		return 0;
@@ -837,7 +876,11 @@ export function createDoctorCommand(
 
 	doctor
 		.command("fix")
-		.description("Kill all running processes")
+		.description(
+			getHubNamespace()?.requirePeerIdentity
+				? "Request authenticated hub retirement"
+				: "Kill all running processes",
+		)
 		.option("--cwd <path>", "Workspace root", process.cwd())
 		.option("--json", "Output as JSON")
 		.option("-v, --verbose", "Show additional diagnostic details")

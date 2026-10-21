@@ -2,11 +2,20 @@
 
 Tauri desktop shell + Bun sidecar backend + Next.js UI for running and inspecting Cline chat sessions.
 
+## cline-qb build policy
+
+CLI, desktop sidecar, VS Code extension/webview and rollout builds use the shared
+`apps/qbrain-build-defines.json` map. Telemetry/error keys, OTEL exporter settings,
+Langfuse inputs, trace controls and the cloud-agents toggle are always compiled as
+empty strings, including when set in the build environment. Direct-provider
+credentials are not part of this map. Build-time suppression does not replace the
+separate runtime service and network-boundary checks required by QB-AGENT-001.
+
 ## Dev Commands
 
 From `apps/examples/desktop-app/`:
 
-- `bun run dev:headless` - Next.js UI (`http://localhost:3125`) and sidecar backend with a fresh shared approval credential
+- `bun run dev:headless` - Next.js UI (`http://localhost:32125`) and sidecar backend with a fresh shared approval credential
 - `bun run dev:web` - Next.js UI only (approval-gated tools require `dev:headless` or the native app)
 - `bun run dev:sidecar` - sidecar backend only (approval-gated tools require `dev:headless` or the native app)
 - `bun run dev` - Tauri desktop dev
@@ -212,15 +221,7 @@ bundled release notes. Every so often a one-time "What's new" dialog catches
 users up on accumulated features — see the `desktop-whats-new` skill
 (`.cline/skills/desktop-whats-new/SKILL.md`).
 
-Installed apps auto-update via the Tauri updater: they poll the rolling
-`desktop-latest` release's `latest.json` on launch and every 2 hours, download
-updates in the background, and prompt for a restart. macOS installs the update
-in the background too; Windows and Linux install it when the user restarts
-(the NSIS installer on Windows, `pkexec dpkg -i` / `rpm -U` on Linux, which
-asks for the user's password). Two things must never be lost: the
-`desktop-latest` release/tag (its feed URL is baked into shipped apps) and the
-updater private key (`TAURI_SIGNING_PRIVATE_KEY` — without it, shipped apps
-can't verify new updates).
+cline-qb disables automatic and manual app updates. It includes no Tauri updater plugin, update feeds, polling loop or installer path. Stale update IPC calls return disabled guidance and cannot restart or install a build. Install a matching reviewed cline-qb build explicitly; hub mismatch prompts never download an upstream app.
 
 ### Linux
 
@@ -238,9 +239,9 @@ sudo dnf install ./Cline_<version>_x86_64.rpm    # Fedora / RHEL (x86_64)
 sudo dnf install ./Cline_<version>_aarch64.rpm   # Fedora / RHEL (arm64)
 ```
 
-The app installs as `/usr/bin/cline-app` with a `Cline` launcher entry; the
-sidecar is `/usr/bin/code-sidecar` and the bundled SSH remote helpers live in
-`/usr/lib/Cline/`. The tray icon needs a StatusNotifier host (KDE, XFCE, and
+The app installs as `/usr/bin/cline-qb-app` with a `cline-qb` launcher entry; the
+sidecar is `/usr/bin/cline-qb-sidecar` and the bundled SSH remote helpers live in
+`/usr/lib/cline-qb/`. The tray icon needs a StatusNotifier host (KDE, XFCE, and
 GNOME with the AppIndicator extension); without one the app still runs but the
 tray menu is unavailable. There is no AppImage: linuxdeploy cannot process the
 Bun-compiled sidecar (`ldd` fails on it and `patchelf` corrupts it), so the
@@ -376,7 +377,7 @@ credentials, request headers, recorded audio, or transcript contents.
   This also matches hybrid-GPU systems where another GPU renders, which then
   lose the faster DMA-BUF path (not hardware acceleration as a whole). To opt
   out, fully Quit from the tray (closing the window only hides it) and launch
-  with `WEBKIT_DISABLE_DMABUF_RENDERER=0 cline-app`; any value you set is
+  with `WEBKIT_DISABLE_DMABUF_RENDERER=0 cline-qb-app`; any value you set is
   left untouched.
 - If package changes are not reflected, rebuild SDK packages (`bun run build:sdk`).
   The next desktop or CLI Hub connection will reuse a compatible running Hub or

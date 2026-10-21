@@ -616,11 +616,9 @@ describe("buildSessionConfig", () => {
 		// The mocked-manager tests above cannot catch a mirror payload that the
 		// real ProviderSettingsSchema.parse would reject (the resolver swallows
 		// save failures), so exercise the real manager against a temp file.
-		// Import the built package by file path: the bare "@cline/core"
-		// specifier is aliased to an in-memory stub in vitest.config.ts (which
-		// validates nothing), and importing SDK *source* would pull it into
-		// this project's tsc program (TS6059: outside rootDir).
-		const { ProviderSettingsManager } = await import("../../node_modules/@cline/core/dist/index.js")
+		// The helper snapshots the built implementation before Bun installs
+		// its package mock. Vitest also resolves this physical build directly.
+		const { RealProviderSettingsManager: ProviderSettingsManager } = await import("../test/real-core-exports")
 		const realManager = new ProviderSettingsManager({
 			filePath: path.join(tempDir, "settings", "providers.json"),
 		})

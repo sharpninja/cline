@@ -101,8 +101,8 @@ const PER_FILE_TIMEOUT_MS = 120_000
 // PER_FILE_TIMEOUT_MS.
 const PER_TEST_TIMEOUT_ARGS = process.platform === "win32" ? ["--timeout", "15000"] : []
 
-async function runOne(file: string): Promise<FileResult> {
-	const proc = Bun.spawn(["bun", "test", ...PER_TEST_TIMEOUT_ARGS, file], {
+async function runOne(file: string, passthrough: string[] = []): Promise<FileResult> {
+	const proc = Bun.spawn(["bun", "test", ...PER_TEST_TIMEOUT_ARGS, ...passthrough, file], {
 		cwd: projectRoot,
 		stdout: "pipe",
 		stderr: "pipe",
@@ -129,13 +129,16 @@ async function runOne(file: string): Promise<FileResult> {
 	return { file, code, pass, fail: effectiveFail, output }
 }
 
-async function runPool(files: string[], concurrency: number): Promise<FileResult[]> {
+export async function runPool(files: string[], concurrency: number, passthrough: string[] = []): Promise<FileResult[]> {
+	if (!Number.isInteger(concurrency) || concurrency < 1) {
+		throw new RangeError("Test concurrency must be a positive integer")
+	}
 	const results: FileResult[] = []
 	let next = 0
 	const launch = async (): Promise<void> => {
 		while (next < files.length) {
 			const file = files[next++]
-			const result = await runOne(file)
+			const result = await runOne(file, passthrough)
 			results.push(result)
 			const failed = result.fail > 0 || result.code !== 0
 			const status = failed ? "FAIL" : "ok"
@@ -154,7 +157,7 @@ async function runPool(files: string[], concurrency: number): Promise<FileResult
 	return results
 }
 
-function parseConcurrency(argv: string[]): number {
+export function parseConcurrency(argv: string[]): number {
 	const flagIdx = argv.findIndex((a) => a === "-c" || a === "--concurrency")
 	if (flagIdx !== -1 && argv[flagIdx + 1]) {
 		const n = Number(argv[flagIdx + 1])
@@ -232,4 +235,4 @@ async function main(): Promise<void> {
 	console.log("All unit test files passed.")
 }
 
-void main()
+if (import.meta.main) void main()

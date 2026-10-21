@@ -1,9 +1,8 @@
 import { join } from "node:path";
 import process from "node:process";
 
-const webviewHost =
-	process.env.CLINE_HUB_WEBVIEW_DEV_HOST?.trim() || "127.0.0.1";
-const webviewPort = process.env.CLINE_HUB_WEBVIEW_DEV_PORT?.trim() || "5173";
+const webviewHost = "127.0.0.1";
+const webviewPort = "5173";
 const webviewDevServerUrl =
 	process.env.VITE_DEV_SERVER_URL?.trim() ||
 	`http://${webviewHost}:${webviewPort}`;
@@ -54,7 +53,7 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 console.log(`[cline-hub:dev] Vite webview: ${webviewDevServerUrl}`);
-console.log("[cline-hub:dev] Hub dashboard: http://127.0.0.1:8787/");
+console.log("[cline-hub:dev] Hub dashboard: http://127.0.0.1:8797/");
 
 spawn(
 	"webview",

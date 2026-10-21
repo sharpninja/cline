@@ -21,7 +21,17 @@ import {
 } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeModelsDevProviderModels } from "../catalog/catalog-live";
-import { createOpenAICompatibleProvider } from "./ai-sdk";
+import {
+	createAnthropicProvider,
+	createClaudeCodeProvider,
+	createDifyProvider,
+	createGoogleProvider,
+	createOpenAICodexProvider,
+	createOpenAICompatibleProvider,
+	createOpenAIProvider,
+	createOpenCodeProvider,
+	createSapAiCoreProvider,
+} from "./ai-sdk";
 import {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_FRACTION,
@@ -383,6 +393,137 @@ describe("sdk-gateway", () => {
 		expect(events.at(-1)).toMatchObject({ type: "finish", reason: expected });
 	});
 
+	it.each([
+		["compatible", createOpenAICompatibleProvider],
+		["anthropic", createAnthropicProvider],
+		["openai", createOpenAIProvider],
+		["google", createGoogleProvider],
+	] as const)("%s adapter preserves governed tools under arbitrary provider identity", async (_name, factory) => {
+		mockSuccessfulStream();
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "test-governed",
+						name: "Test",
+						defaultModelId: "alpha",
+						models: [
+							{ id: "alpha", name: "Alpha", providerId: "test-governed" },
+						],
+					},
+					defaults: {
+						apiKey: "test-key",
+						baseUrl: "https://example.invalid/v1",
+					},
+					createProvider: factory,
+				},
+			],
+		});
+		await collect(
+			await gateway
+				.createAgentModel(
+					{ providerId: "test-governed" },
+					{ tools: [], modelTools: [{ name: "web_search" }] },
+				)
+				.stream({
+					messages: baseMessages,
+					systemPrompt: "MANDATORY",
+					tools: [
+						{
+							name: "required",
+							description: "Required",
+							inputSchema: { type: "object" },
+						},
+					],
+					toolExecutionPolicy: "host-only",
+				}),
+		);
+		expect(streamTextSpy).toHaveBeenCalledTimes(1);
+		const call = streamTextSpy.mock.calls[0][0];
+		expect(call.system).toBe("MANDATORY");
+		expect(Object.keys(call.tools)).toEqual(["required"]);
+		expect(call.tools.required).not.toHaveProperty("execute");
+		expect(call).not.toHaveProperty("toolExecutionPolicy");
+		expect(nativeWebSearchSpy).not.toHaveBeenCalled();
+	});
+	it.each([
+		["claude-code", createClaudeCodeProvider],
+		["codex-cli", createOpenAICodexProvider],
+		["opencode", createOpenCodeProvider],
+		["dify", createDifyProvider],
+		["sap", createSapAiCoreProvider],
+	] as const)("%s refuses host-only execution before loading its implementation", async (_name, factory) => {
+		const provider = await factory({ providerId: "arbitrary-alias" });
+		const context = {
+			provider: {
+				id: "arbitrary-alias",
+				name: "Alias",
+				defaultModelId: "alpha",
+				models: [],
+			},
+			model: { id: "alpha", name: "Alpha", providerId: "arbitrary-alias" },
+			config: { providerId: "arbitrary-alias" },
+		};
+		expect(provider.enforcesHostToolExecution).toBe(false);
+		await expect(
+			collect(
+				await provider.stream(
+					{
+						providerId: "arbitrary-alias",
+						modelId: "alpha",
+						messages: baseMessages,
+						toolExecutionPolicy: "host-only",
+					},
+					context,
+				),
+			),
+		).rejects.toThrow("host-only tool execution");
+		expect(streamTextSpy).not.toHaveBeenCalled();
+		expect(codexExecFactorySpy).not.toHaveBeenCalled();
+		expect(claudeCodeFactorySpy).not.toHaveBeenCalled();
+	});
+	it("refuses a route that would discard required host tools", async () => {
+		const provider = await createOpenAICompatibleProvider({
+			providerId: "arbitrary-alias",
+		});
+		await expect(
+			collect(
+				await provider.stream(
+					{
+						providerId: "arbitrary-alias",
+						modelId: "image",
+						messages: baseMessages,
+						tools: [
+							{
+								name: "required",
+								description: "Required",
+								inputSchema: { type: "object" },
+							},
+						],
+						toolExecutionPolicy: "host-only",
+					},
+					{
+						provider: {
+							id: "arbitrary-alias",
+							name: "Alias",
+							defaultModelId: "image",
+							models: [],
+						},
+						model: {
+							id: "image",
+							name: "Image",
+							providerId: "arbitrary-alias",
+							operation: "image-generation",
+						},
+						config: { providerId: "arbitrary-alias" },
+					},
+				),
+			),
+		).rejects.toThrow("cannot preserve required host tools");
+		expect(streamTextSpy).not.toHaveBeenCalled();
+		expect(generateImageSpy).not.toHaveBeenCalled();
+	});
 	beforeEach(() => {
 		resetSdkErrorRateLimiterForTests();
 		streamTextSpy.mockReset();

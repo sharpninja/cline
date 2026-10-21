@@ -12,15 +12,10 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-	checkForUpdateNow,
-	restartToApplyUpdate,
-	useAppUpdateStatus,
-} from "@/hooks/use-app-update";
+import { useAppUpdateStatus } from "@/hooks/use-app-update";
 import { desktopClient } from "@/lib/desktop-client";
 import {
 	isPersistableHubMismatchKey,
-	resolveHubUpdateRestartDecision,
 	retainDismissalForIncomingMismatch,
 	shouldShowHubMismatchDialog,
 } from "./hub-update-required-helpers";
@@ -48,7 +43,7 @@ const HUB_UPGRADE_TIMEOUT_MS = 60_000;
  * reloads, relaunches), and in-memory dismissal state resurrected the modal
  * each time. Storage keeps one key - a different hub build prompts again.
  */
-const DISMISSED_MISMATCH_STORAGE_KEY = "cline.hub-mismatch-dismissed";
+const DISMISSED_MISMATCH_STORAGE_KEY = "cline-qb.hub-mismatch-dismissed";
 
 function readPersistedDismissedKey(): string | null {
 	try {
@@ -67,27 +62,7 @@ function persistDismissedKey(key: string): void {
 	}
 }
 
-// One updater kick per observed mismatch per page lifetime. Module scope
-// survives component remounts (session switches) so the update feed is not
-// re-hit every time the dialog mounts.
-let updateCheckKickedForKey: string | null = null;
-
-/**
- * Blocking prompt shown when the sidecar reports that the shared Cline Hub
- * does not match this app's build.
- *
- * Two directions, two dialogs:
- * - `build_mismatch` / `unsupported_protocol`: the Hub is newer than this
- *   app. Accepting runs an updater check/download right away and, once an
- *   update is staged, restarts into it so the app and the Hub run the same
- *   version again. Dismissible - the app keeps working over the compatible
- *   wire protocol.
- * - `outdated_hub`: this app is the newer build, and the running Hub was
- *   left in place only because it is still serving other clients' sessions.
- *   Not dismissible: the user chooses between updating the Hub now (which
- *   interrupts those sessions, then relaunches the app onto the fresh Hub)
- *   and quitting the app (the old Hub keeps running for its clients).
- */
+/** Hub mismatches show matching-build guidance; the app updater is unavailable. */
 export function HubUpdateRequiredDialog() {
 	const [mismatch, setMismatch] = useState<HubBuildMismatchPayload | null>(
 		null,
@@ -128,41 +103,6 @@ export function HubUpdateRequiredDialog() {
 	}, []);
 
 	const mismatchKey = mismatch ? mismatchKeyOf(mismatch) : null;
-
-	// When a newer Hub appears, stage the matching app update right away (if
-	// a release exists) so the prompt can open actionable instead of waiting
-	// for the next 30s background cycle. Without a staged update the
-	// build_mismatch modal stays hidden entirely - see
-	// shouldShowHubMismatchDialog.
-	useEffect(() => {
-		if (
-			!mismatch ||
-			mismatch.reason !== "build_mismatch" ||
-			mismatchKey === null ||
-			mismatchKey === dismissedKey ||
-			updateCheckKickedForKey === mismatchKey
-		) {
-			return;
-		}
-		updateCheckKickedForKey = mismatchKey;
-		void checkForUpdateNow();
-	}, [mismatch, mismatchKey, dismissedKey]);
-
-	const handleUpdateAndRestart = useCallback(async () => {
-		setPhase("updating");
-		setUpdateHint(null);
-		const decision = resolveHubUpdateRestartDecision(await checkForUpdateNow());
-		if (decision.action === "restart") {
-			setPhase("restarting");
-			const restarted = await restartToApplyUpdate();
-			if (!restarted) {
-				setPhase("idle");
-			}
-			return;
-		}
-		setUpdateHint(decision.hint);
-		setPhase("idle");
-	}, []);
 
 	const handleUpgradeHub = useCallback(async () => {
 		setPhase("updating");
@@ -283,8 +223,8 @@ export function HubUpdateRequiredDialog() {
 						{mismatch?.hubCoreVersion
 							? ` (core ${mismatch.hubCoreVersion})`
 							: ""}
-						, and it no longer matches this app. Update and restart Cline to
-						stay in sync with the running Hub.
+						, and it no longer matches this app. Install a matching reviewed
+						cline-qb build to stay in sync with the running Hub.
 					</AlertDialogDescription>
 					{updateHint ? (
 						<AlertDialogDescription>{updateHint}</AlertDialogDescription>
@@ -294,21 +234,6 @@ export function HubUpdateRequiredDialog() {
 					<AlertDialogCancel disabled={phase !== "idle"}>
 						Later
 					</AlertDialogCancel>
-					<AlertDialogAction
-						disabled={phase !== "idle"}
-						onClick={(event) => {
-							event.preventDefault();
-							void handleUpdateAndRestart();
-						}}
-					>
-						{phase === "restarting"
-							? "Restarting…"
-							: phase === "updating"
-								? "Checking for updates…"
-								: updateHint
-									? "Try again"
-									: "Update and restart"}
-					</AlertDialogAction>
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>

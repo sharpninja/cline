@@ -244,6 +244,7 @@ export interface LocalRuntimeHostOptions {
 	sessionService: SessionBackend;
 	runtimeBuilder?: RuntimeBuilder;
 	createAgent?: (config: AgentConfig) => SessionRuntime;
+	configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 	capabilities?: RuntimeCapabilities;
 	toolPolicies?: AgentConfig["toolPolicies"];
 	providerSettingsManager?: ProviderSettingsManager;
@@ -263,6 +264,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 	public readonly pendingPrompts: PendingPromptsServiceApi;
 	private readonly sessionService: SessionBackend;
 	private readonly runtimeBuilder: RuntimeBuilder;
+	private readonly configureAgentRuntime?: AgentConfig["configureAgentRuntime"];
 	private readonly createAgentInstance: (config: AgentConfig) => SessionRuntime;
 	private readonly toolExecutors?: Partial<ToolExecutors>;
 	private readonly defaultCapabilities?: RuntimeCapabilities;
@@ -296,6 +298,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.distinctId = distinctId;
 		this.sessionService = options.sessionService;
 		this.runtimeBuilder = options.runtimeBuilder ?? new DefaultRuntimeBuilder();
+		this.configureAgentRuntime = options.configureAgentRuntime;
 		this.createAgentInstance =
 			options.createAgent ?? ((config) => new SessionRuntime(config));
 		this.defaultCapabilities = normalizeRuntimeCapabilities(
@@ -551,6 +554,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			this.defaultTelemetry;
 		let bootstrap!: Awaited<ReturnType<typeof prepareLocalRuntimeBootstrap>>;
 		const subAgentDeps = {
+			configureAgentRuntime: this.configureAgentRuntime,
 			getSession: (sid: string) => this.sessions.get(sid),
 			subAgentStarts: this.subAgentStarts,
 			onAgentEvent: (
@@ -644,6 +648,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (!resumedArtifacts) manifest.metadata = initialSessionMetadata;
 		const runtime = await this.runtimeBuilder.build({
 			...bootstrap.runtimeBuilderInput,
+			configureAgentRuntime: this.configureAgentRuntime,
 			distinctId: this.distinctId,
 			runCommandExecutionController: this.runCommandExecutionController,
 		});
@@ -759,6 +764,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		});
 
 		const agentConfig = {
+			configureAgentRuntime: this.configureAgentRuntime,
+			cwd: configWithProvider.cwd,
+			workspaceRoot: configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 			distinctId: this.distinctId,
 			sessionId,
 			providerId: providerConfig.providerId,

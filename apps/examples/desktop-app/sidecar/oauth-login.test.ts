@@ -22,7 +22,7 @@ function makeDependencies(overrides: {
 	const save =
 		overrides.save ??
 		vi.fn(() => ({
-			provider: "cline",
+			provider: "openai-codex",
 			auth: { accessToken: "saved-token" },
 		}));
 	return {
@@ -43,14 +43,17 @@ describe("runCancellableProviderOAuthLogin", () => {
 
 		const result = await runCancellableProviderOAuthLogin(
 			makeManager(),
-			"cline",
+			"openai-codex",
 			() => undefined,
 			{},
 			dependencies,
 		);
 
 		expect(save).toHaveBeenCalledTimes(1);
-		expect(result).toEqual({ provider: "cline", accessToken: "saved-token" });
+		expect(result).toEqual({
+			provider: "openai-codex",
+			accessToken: "saved-token",
+		});
 	});
 
 	it("rejects promptly on cancel and never persists a late completion", async () => {
@@ -64,14 +67,14 @@ describe("runCancellableProviderOAuthLogin", () => {
 
 		const pending = runCancellableProviderOAuthLogin(
 			makeManager(),
-			"cline",
+			"openai-codex",
 			() => undefined,
 			{},
 			dependencies,
 		);
 		// Cancellation must reject the pending login right away, without
 		// waiting for the browser round-trip to finish.
-		expect(cancelProviderOAuthLogin("cline")).toBe(true);
+		expect(cancelProviderOAuthLogin("openai-codex")).toBe(true);
 		await expect(pending).rejects.toBeInstanceOf(OAuthLoginCancelledError);
 
 		// The user completes the abandoned browser flow afterwards: the
@@ -82,18 +85,18 @@ describe("runCancellableProviderOAuthLogin", () => {
 	});
 
 	it("reports when there is no pending login to cancel", () => {
-		expect(cancelProviderOAuthLogin("cline")).toBe(false);
+		expect(cancelProviderOAuthLogin("openai-codex")).toBe(false);
 	});
 
 	it("cancels a dangling attempt when a new login starts for the provider", async () => {
 		let resolveFirstLogin: (credentials: Credentials) => void = () => undefined;
 		const firstSave = vi.fn(() => ({
-			provider: "cline",
+			provider: "openai-codex",
 			auth: { accessToken: "first-token" },
 		}));
 		const first = runCancellableProviderOAuthLogin(
 			makeManager(),
-			"cline",
+			"openai-codex",
 			() => undefined,
 			{},
 			makeDependencies({
@@ -111,7 +114,7 @@ describe("runCancellableProviderOAuthLogin", () => {
 			});
 		const second = runCancellableProviderOAuthLogin(
 			makeManager(),
-			"cline",
+			"openai-codex",
 			() => undefined,
 			{},
 			secondDependencies,
@@ -119,7 +122,7 @@ describe("runCancellableProviderOAuthLogin", () => {
 
 		await expect(first).rejects.toBeInstanceOf(OAuthLoginCancelledError);
 		await expect(second).resolves.toEqual({
-			provider: "cline",
+			provider: "openai-codex",
 			accessToken: "saved-token",
 		});
 
@@ -142,7 +145,7 @@ describe("runCancellableProviderOAuthLogin", () => {
 
 		const pending = runCancellableProviderOAuthLogin(
 			makeManager(),
-			"cline",
+			"openai-codex",
 			() => undefined,
 			{ owner: connection },
 			dependencies,
@@ -160,5 +163,40 @@ describe("runCancellableProviderOAuthLogin", () => {
 		resolveLogin({ accessToken: "late-token" });
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(save).not.toHaveBeenCalled();
+	});
+});
+describe("hosted account OAuth exclusion", () => {
+	it.each([
+		"cline",
+		"cline-pass",
+		" CLINE ",
+	])("refuses %s before state, browser, or credentials", async (provider) => {
+		const getProviderSettings = vi.fn(() => ({
+			auth: { accessToken: "old-token" },
+		}));
+		const manager = {
+			getProviderSettings,
+		} as unknown as ProviderSettingsManager;
+		const login = vi.fn(async () => ({ accessToken: "new-token" }));
+		const openUrl = vi.fn();
+		const { dependencies, save } = makeDependencies({ login });
+		await expect(
+			runCancellableProviderOAuthLogin(
+				manager,
+				provider,
+				openUrl,
+				{},
+				dependencies,
+			),
+		).rejects.toThrow(/Cline account services are unavailable/);
+		for (const spy of [
+			getProviderSettings,
+			login,
+			save,
+			openUrl,
+			dependencies.markEnabled,
+		])
+			expect(spy).not.toHaveBeenCalled();
+		expect(cancelProviderOAuthLogin(provider)).toBe(false);
 	});
 });

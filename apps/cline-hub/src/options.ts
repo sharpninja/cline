@@ -9,13 +9,18 @@ export interface ClineHubServerOptions {
 }
 
 const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 8787;
-const DASHBOARD_PORT_ENV = "CLINE_HUB_DASHBOARD_PORT";
+const DEFAULT_PORT = 8797;
+const DASHBOARD_PORT_ENV = "CLINE_QB_HUB_DASHBOARD_PORT";
 
 function parsePort(value: string | undefined): number {
 	if (!value?.trim()) return DEFAULT_PORT;
-	const port = Number.parseInt(value, 10);
-	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+	const port = Number(value);
+	if (
+		!/^\d+$/.test(value.trim()) ||
+		!Number.isInteger(port) ||
+		port < 1 ||
+		port > 65535
+	) {
 		throw new Error(
 			`${DASHBOARD_PORT_ENV} must be an integer from 1 to 65535, got ${value}`,
 		);

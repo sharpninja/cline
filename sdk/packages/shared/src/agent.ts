@@ -145,6 +145,7 @@ export type AgentRunStatus =
 	| "idle"
 	| "running"
 	| "completed"
+	| "blocked"
 	| "aborted"
 	| "failed";
 
@@ -219,6 +220,8 @@ export interface AgentTool<TInput = unknown, TOutput = unknown>
 // =============================================================================
 
 export interface AgentModelRequest {
+	/** Host-owned policy: adapters must reject any unobservable tool execution. */
+	toolExecutionPolicy?: "host-only";
 	systemPrompt?: string;
 	messages: readonly AgentMessage[];
 	tools: readonly AgentToolDefinition[];
@@ -363,6 +366,8 @@ export type AgentModelEvent =
 	  };
 
 export interface AgentModel {
+	/** Adapter honors host-only requests, including nested provider dispatch. Unknown is refused. */
+	readonly enforcesHostToolExecution?: boolean;
 	stream: (
 		request: AgentModelRequest,
 	) => AsyncIterable<AgentModelEvent> | Promise<AsyncIterable<AgentModelEvent>>;
@@ -458,6 +463,14 @@ export interface AgentAfterToolResult {
 
 export interface AgentRunLifecycleContext {
 	snapshot: AgentRuntimeStateSnapshot;
+	/**
+	 * Current invocation input, independent of snapshot.messages. A host may have
+	 * already seeded the input into history using appendInput: false.
+	 * beforeRun receives an independent data copy, preserving string whitespace,
+	 * message IDs and supported media values. Undefined means inputless continue;
+	 * an empty string or empty array is still explicit input. Absent in afterRun.
+	 */
+	input?: string | AgentMessage | readonly AgentMessage[];
 }
 
 // =============================================================================
@@ -531,6 +544,62 @@ export interface AgentRuntimePlugin {
 // Runtime config
 // =============================================================================
 
+/** Host-owned completion obligations; the runtime does not own persistence or policy. */
+export type AgentCompletionDecision =
+	| { outcome: "allow" }
+	| { outcome: "continue" | "blocked"; diagnostic: string };
+
+/** Candidate completion supplied only to the trusted host before delivery. */
+export interface AgentCompletionContext {
+	snapshot: AgentRuntimeStateSnapshot;
+	source: "text" | "tool" | "tool-result";
+	candidate: AgentMessage;
+	signal?: AbortSignal;
+}
+
+/** Final host projection/authorization for each actual provider request. */
+export type AgentModelRequestDecision =
+	| { outcome: "allow"; request: Omit<AgentModelRequest, "signal"> }
+	| { outcome: "blocked"; diagnostic: string };
+
+export interface AgentModelRequestContext {
+	snapshot: AgentRuntimeStateSnapshot;
+	/** Detached from optional-hook inputs. Binary images and URLs are preserved. */
+	request: Omit<AgentModelRequest, "signal">;
+	signal?: AbortSignal;
+}
+/** Mandatory host authorization, independent of optional tool hooks. */
+export type AgentToolExecutionDecision =
+	| { outcome: "allow" }
+	| { outcome: "deny" | "blocked"; diagnostic: string };
+
+export interface AgentToolExecutionContext {
+	snapshot: AgentRuntimeStateSnapshot;
+	/** Detached, deeply frozen final arguments and call identity. */
+	toolCall: Readonly<AgentToolCallPart>;
+	basePolicy: Readonly<ToolPolicy>;
+	effectivePolicy: Readonly<ToolPolicy>;
+	signal?: AbortSignal;
+}
+
+/** Host acknowledgment of an actual local tool outcome, before optional rewriting. */
+export type AgentToolResultDecision =
+	| { outcome: "allow" }
+	| { outcome: "blocked"; diagnostic: string };
+
+export interface AgentToolResultContext {
+	snapshot: AgentRuntimeStateSnapshot;
+	/** Detached, deeply frozen call identity and arguments captured before execution. */
+	toolCall: Readonly<AgentToolCallPart>;
+	/** The execution outcome, not the optional afterTool projection. */
+	result: Readonly<AgentToolResult>;
+	executed: boolean;
+	startedAtUtc: string;
+	endedAtUtc: string;
+	durationMs: number;
+	signal?: AbortSignal;
+}
+
 export interface AgentRuntimeConfig {
 	/**
 	 * Stable end-user distinct ID used for provider and observability metadata.
@@ -566,6 +635,11 @@ export interface AgentRuntimeConfig {
 	systemPrompt?: string;
 	messageModelInfo?: AgentMessage["modelInfo"];
 	model: AgentModel;
+	/** Host-owned registrations, captured immutably at construction. Optional tools
+	 * cannot reuse these names. Advertisement/execution policy still belongs to
+	 * the host's modelRequestGate/toolExecutionGate. Tool metadata must be plain data. */
+	// biome-ignore lint/suspicious/noExplicitAny: tool input/output types vary per tool
+	requiredTools?: readonly AgentTool<any, any>[];
 	modelOptions?: Record<string, unknown>;
 	/** Provider-executed tools, separate from locally executed AgentTools. */
 	modelTools?: readonly import("./llms/model-tools").ModelTool[];
@@ -581,6 +655,38 @@ export interface AgentRuntimeConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 	};
+	/**
+	 * Mandatory host check, separate from optional plugin hooks. Called before a
+	 * final text/call is delivered and after completion-tool hooks before its
+	 * successful result is delivered. The host owns continuation bounds and
+	 * fingerprint/obligation state. Exceptions or invalid decisions block.
+	 */
+	completionGate?: (
+		context: AgentCompletionContext,
+	) => Promise<AgentCompletionDecision> | AgentCompletionDecision;
+	/** Runs directly before every model adapter call, after optional hooks/compaction/observers.
+	 * The host returns a complete authorized projection. Invalid decisions and failures block.
+	 * Runtime cancellation cannot be replaced. This does not protect provider-internal tools. */
+	modelRequestGate?: (
+		context: AgentModelRequestContext,
+	) => Promise<AgentModelRequestDecision> | AgentModelRequestDecision;
+	/**
+	 * Runs after optional rewriting, approvals and tool-started observers, directly
+	 * before local dispatch. Denial remains an error through afterTool hooks.
+	 * Exceptions/malformed decisions block the run; deny permits corrective work.
+	 * Inputs must be structured-cloneable plain data. The host owns mandatory
+	 * policy and approval; this does not authorize provider-side execution.
+	 */
+	toolExecutionGate?: (
+		context: AgentToolExecutionContext,
+	) => Promise<AgentToolExecutionDecision> | AgentToolExecutionDecision;
+	/** Records the unmodified local outcome before optional afterTool hooks or
+	 * completion. Called even for refused/unknown calls and after cancellation of
+	 * an executing tool. The host owns durable storage. Invalid decisions, errors
+	 * and non-plain/uncloneable outcomes block further dispatch. No retry is implied. */
+	toolResultGate?: (
+		context: AgentToolResultContext,
+	) => Promise<AgentToolResultDecision> | AgentToolResultDecision;
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;
 	toolContextMetadata?: Record<string, unknown>;

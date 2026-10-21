@@ -522,13 +522,14 @@ const LOG_DISPATCH: Record<string, typeof console.info> = {
 // Core streams a steady flow of info/debug log chunks during a session.
 // Serializing them through the console on the streaming hot path costs real
 // CPU (DevTools keeps every entry alive), so anything below warn is dropped
-// unless the user opts in via `localStorage.setItem("cline:debug-logs", "1")`.
+// unless the user opts in via `localStorage.setItem("cline-qb.debug-logs", "1")`.
 let verboseCoreLogs: boolean | undefined;
 
 function shouldLogVerboseCoreLogs(): boolean {
 	if (verboseCoreLogs === undefined) {
 		try {
-			verboseCoreLogs = window.localStorage.getItem("cline:debug-logs") === "1";
+			verboseCoreLogs =
+				window.localStorage.getItem("cline-qb.debug-logs") === "1";
 		} catch {
 			verboseCoreLogs = false;
 		}

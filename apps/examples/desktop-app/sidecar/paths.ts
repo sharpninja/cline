@@ -6,9 +6,12 @@ import {
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { resolveSessionDataDir } from "@cline/shared/storage";
+import {
+	resolveClineDataDir,
+	resolveSessionDataDir,
+	validateStoragePath,
+} from "@cline/shared/storage";
 import type { JsonRecord } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -36,14 +39,16 @@ export function resolveWorkspaceRoot(launchCwd: string): string {
 // ---------------------------------------------------------------------------
 
 export function sharedSessionDataDir(): string {
-	return process.env.CLINE_SESSION_DATA_DIR?.trim() || resolveSessionDataDir();
+	return resolveSessionDataDir();
 }
 
 export function sharedSessionArtifactPath(
 	sessionId: string,
 	suffix: string,
 ): string {
-	return join(sharedSessionDataDir(), sessionId, `${sessionId}.${suffix}`);
+	return validateStoragePath(
+		join(sharedSessionDataDir(), sessionId, `${sessionId}.${suffix}`),
+	);
 }
 
 export function sharedSessionMessagesPath(sessionId: string): string {
@@ -59,12 +64,12 @@ export function sharedSessionMessagesWritePath(sessionId: string): string {
 // ---------------------------------------------------------------------------
 
 export function toolApprovalDir(): string {
-	return (
-		process.env.CLINE_TOOL_APPROVAL_DIR?.trim() ||
-		join(sharedSessionDataDir(), "tool-approvals")
-	);
+	return validateStoragePath(join(sharedSessionDataDir(), "tool-approvals"));
 }
 
+export function resolveDesktopLogPath(): string {
+	return validateStoragePath(join(resolveClineDataDir(), "logs", "code.log"));
+}
 // MCP settings intentionally have no resolver here: every reader and writer
 // must share @cline/shared/storage `resolveMcpSettingsPath()` so the sidecar,
 // the hub runtime, and the CLI all agree on one canonical file. A local
@@ -76,14 +81,12 @@ export function toolApprovalDir(): string {
 // ---------------------------------------------------------------------------
 
 function kanbanDataRoot(): string {
-	return (
-		process.env.CLINE_KANBAN_DATA_DIR?.trim() ||
-		join(homedir(), ".cline", "apps", "kanban")
-	);
+	return validateStoragePath(join(resolveClineDataDir(), "apps", "kanban"));
 }
-
 export function sessionLogPath(sessionId: string): string {
-	return join(kanbanDataRoot(), "sessions", `${sessionId}.jsonl`);
+	return validateStoragePath(
+		join(kanbanDataRoot(), "sessions", `${sessionId}.jsonl`),
+	);
 }
 
 // ---------------------------------------------------------------------------

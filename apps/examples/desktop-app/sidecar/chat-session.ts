@@ -1,3 +1,4 @@
+import { assertDesktopSessionProvider } from "./provider-policy";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -44,10 +45,7 @@ import {
 	trackQueuedAttachments,
 } from "./attachments";
 import { createDesktopExtensionContext } from "./client-context";
-import {
-	getCloudSessionManager,
-	isCloudOuterSessionId,
-} from "./cloud-sessions";
+import { isDesktopCloudSession } from "./cloud-sessions";
 import {
 	cancelSidecarMistakeQuestions,
 	emitChunk,
@@ -58,7 +56,7 @@ import {
 	requestSidecarAskQuestion,
 	sendEvent,
 } from "./context";
-import { isCloudAgentsEnabled } from "./feature-flags";
+import { rejectClineAccount } from "@cline/qbrain-governance/cloud-policy";
 import { readSessionManifest, sharedSessionDataDir } from "./paths";
 import { runPluginSlashCommand } from "./plugin-commands";
 import { derivePromptFromMessages } from "./session-data/common";
@@ -680,6 +678,7 @@ function buildCoreSessionConfig(
 	telemetryUser?: SidecarContext["telemetryUser"],
 	mistakeRecovery?: ReturnType<typeof createDesktopMistakeRecovery>,
 ): JsonRecord {
+	assertDesktopSessionProvider(config, true);
 	const rawWorkspaceRoot = config.workspaceRoot ?? config.workspace_root;
 	const workspaceRoot =
 		typeof rawWorkspaceRoot === "string" ? rawWorkspaceRoot.trim() : "";
@@ -744,6 +743,7 @@ export function resolveDesktopSessionMode(
 export function buildSessionConnectionUpdate(
 	config: JsonRecord,
 ): SessionConnectionUpdate {
+	assertDesktopSessionProvider(config);
 	// Coerce the untrusted webview JSON (snake_case aliases, blank strings)
 	// into typed fields; the thinking/reasoning transition rules live in the
 	// shared @cline/core builder.
@@ -964,6 +964,7 @@ function readExplicitSystemPrompt(config: JsonRecord): string {
 async function withRemoteProviderCredentials(
 	config: JsonRecord,
 ): Promise<JsonRecord> {
+	assertDesktopSessionProvider(config, true);
 	const providerId = String(config.provider ?? config.providerId ?? "").trim();
 	if (!providerId) return config;
 
@@ -1048,6 +1049,7 @@ async function handleStart(
 	request: ChatSessionCommandRequest,
 ): Promise<unknown> {
 	if (!request.config) throw new Error("config is required");
+	assertDesktopSessionProvider(request.config, true);
 	const binding = getSessionRuntimeBinding(
 		ctx,
 		undefined,
@@ -1185,7 +1187,7 @@ async function handleAttach(
 			? (session.metadata as JsonRecord)
 			: undefined;
 	const existing = ctx.liveSessions.get(sessionId);
-	await binding.hubClient.command("session.attach", { sessionId }, sessionId);
+	assertDesktopSessionProvider(request.config ?? {});
 	const baseAttachedConfig: JsonRecord = {
 		...(existing?.config ?? {}),
 		...(request.config ?? {}),
@@ -1204,6 +1206,8 @@ async function handleAttach(
 			String(request.config?.workspaceRoot ?? "").trim() ||
 			String(existing?.config.workspaceRoot ?? "").trim(),
 	};
+	assertDesktopSessionProvider(baseAttachedConfig, true);
+	await binding.hubClient.command("session.attach", { sessionId }, sessionId);
 	ctx.liveSessions.set(
 		sessionId,
 		createLiveSession(baseAttachedConfig, {
@@ -1546,6 +1550,12 @@ async function recoverSessionAfterHubLoss(
 	let outcome: HubReconnectOutcome = "failed";
 	while (Date.now() < deadline && stillWanted()) {
 		try {
+			assertDesktopSessionProvider(session.config, true);
+		} catch (error) {
+			lastError = error;
+			break;
+		}
+		try {
 			// The same connection refresh a send performs. It only succeeds
 			// against a hub that holds the session live, so it tells a
 			// surviving session apart from one lost with its hub.
@@ -1606,6 +1616,31 @@ async function recoverSessionAfterHubLoss(
 	return outcome;
 }
 
+async function resolveExistingSessionConfig(
+	ctx: SidecarContext,
+	manager: ClineCore,
+	sessionId: string,
+	updates: JsonRecord = {},
+): Promise<JsonRecord> {
+	assertDesktopSessionProvider(updates);
+	let current = ctx.liveSessions.get(sessionId)?.config;
+	if (!current) {
+		const persisted = await manager.get(sessionId);
+		if (!persisted) throw new Error(`Session ${sessionId} not found`);
+		current = {
+			provider: persisted.provider,
+			model: persisted.model,
+			cwd: persisted.cwd,
+			workspaceRoot: persisted.workspaceRoot,
+		};
+	}
+	// A request must not disguise an existing excluded runtime as a direct one.
+	assertDesktopSessionProvider(current, true);
+	const next = mergeSessionConfig(current, updates);
+	assertDesktopSessionProvider(next, true);
+	return next;
+}
+
 async function handleSend(
 	ctx: SidecarContext,
 	request: ChatSessionCommandRequest,
@@ -1626,6 +1661,12 @@ async function handleSend(
 		readEnvironmentId(request.config),
 	);
 	const manager = binding.sessionManager;
+	const nextConfig = await resolveExistingSessionConfig(
+		ctx,
+		manager,
+		sessionId,
+		request.config,
+	);
 	const lockedWorkspaceKey = workspacePathKey(
 		session?.config ?? request.config,
 	);
@@ -1650,14 +1691,7 @@ async function handleSend(
 		try {
 			text = session?.busy
 				? COMPACT_WHILE_RUNNING_MESSAGE
-				: await compactSession(
-						ctx,
-						manager,
-						sessionId,
-						request.config
-							? mergeSessionConfig(session?.config ?? {}, request.config)
-							: (session?.config ?? {}),
-					);
+				: await compactSession(ctx, manager, sessionId, nextConfig);
 		} catch (error) {
 			text = `Compaction failed: ${error instanceof Error ? error.message : String(error)}`;
 		}
@@ -1702,9 +1736,7 @@ async function handleSend(
 	if (!delivery && session?.busy) {
 		delivery = "queue";
 	}
-	const nextConfig = request.config
-		? mergeSessionConfig(session?.config ?? {}, request.config)
-		: session?.config;
+
 	const providerChanged = Boolean(
 		session &&
 			request.config &&
@@ -2022,6 +2054,19 @@ async function handleFork(
 		throw new Error(WORKSPACE_RESTORE_BUSY_ERROR);
 	}
 	const sourceSession = await manager.get(sourceSessionId);
+	assertDesktopSessionProvider(request.config ?? {});
+	assertDesktopSessionProvider(liveSourceSession?.config ?? {});
+	assertDesktopSessionProvider(
+		{
+			...(liveSourceSession?.config ?? request.config ?? {}),
+			provider:
+				sourceSession?.provider ||
+				liveSourceSession?.config.provider ||
+				request.config?.provider ||
+				request.config?.providerId,
+		},
+		true,
+	);
 	if (
 		forkBeforeRunCount !== undefined &&
 		(sourceSession?.status === "running" || sourceSession?.status === "pending")
@@ -2290,6 +2335,7 @@ async function handleRestoreCheckpoint(
 	const requestedConfig = request.config;
 	if (!requestedConfig)
 		throw new Error("config is required to restore a checkpoint");
+	assertDesktopSessionProvider(requestedConfig, true);
 	const cwd =
 		(typeof requestedConfig.cwd === "string" && requestedConfig.cwd.trim()) ||
 		(typeof requestedConfig.workspaceRoot === "string" &&
@@ -2403,6 +2449,7 @@ async function handleSteerPrompt(
 	if (request.promptId !== undefined && !promptId)
 		throw new Error("promptId cannot be empty");
 	const manager = getSessionManager(ctx, sessionId, request.config);
+	await resolveExistingSessionConfig(ctx, manager, sessionId, request.config);
 	const result = promptId
 		? await manager.pendingPrompts.update({
 				sessionId,
@@ -2436,7 +2483,12 @@ async function handleUpdatePendingPrompt(
 		readEnvironmentId(request.config),
 	);
 	const manager = binding.sessionManager;
-	const sessionConfig = ctx.liveSessions.get(sessionId)?.config;
+	const sessionConfig = await resolveExistingSessionConfig(
+		ctx,
+		manager,
+		sessionId,
+		request.config,
+	);
 	// Queued prompts are delivered by the runtime without another pass
 	// through handleSend, so resolve slash commands here too.
 	const runtimePrompt =
@@ -2514,129 +2566,24 @@ export async function handleChatSessionCommand(
 	request: ChatSessionCommandRequest,
 ): Promise<unknown> {
 	const executionTarget = String(request.config?.executionTarget ?? "").trim();
-	const sessionId = request.sessionId?.trim();
-	const existingCloudSession =
-		sessionId &&
-		(isCloudOuterSessionId(sessionId) ||
-			ctx.liveSessions.get(sessionId)?.config.executionTarget === "cloud");
-	if (executionTarget === "cloud" || existingCloudSession) {
-		ctx = getEnvironmentContext(ctx, "local");
-		const cloud = getCloudSessionManager(ctx);
-		// The approval preference lives only client-side; keep the live session
-		// current so a lazily created inner session inherits the user's choice.
-		const requestedAutoApprove = request.config?.autoApproveTools;
-		if (typeof requestedAutoApprove === "boolean" && sessionId) {
-			const live = ctx.liveSessions.get(sessionId);
-			if (live) {
-				live.config.autoApproveTools = requestedAutoApprove;
-			}
-		}
-		switch (request.action) {
-			case "start": {
-				const requestedSessionId = String(
-					request.config?.sessionId ?? request.config?.session_id ?? "",
-				).trim();
-				// Server ids attach even with a cold registry; client-planned ids create.
-				if (requestedSessionId && cloud.isCloudSession(requestedSessionId)) {
-					return await cloud.attach(requestedSessionId);
-				}
-				// Gate new sessions only; existing cloud sessions must remain usable.
-				if (!isCloudAgentsEnabled()) {
-					throw new Error(
-						"Cloud sessions are not enabled for this account yet.",
-					);
-				}
-				const repoUrl = String(request.config?.repoUrl ?? "").trim();
-				const modelId = String(
-					request.config?.model ?? request.config?.modelId ?? "",
-				).trim();
-				if (!repoUrl || !modelId) {
-					throw new Error("repoUrl and model are required for a cloud session");
-				}
-				const branch = String(request.config?.branch ?? "").trim();
-				const initialPrompt = request.prompt?.trim();
-				const reasoningEffort = readReasoningEffort(
-					request.config?.reasoningEffort,
-				);
-				return await cloud.create({
-					...(requestedSessionId ? { requestId: requestedSessionId } : {}),
-					repoUrl,
-					modelId,
-					...(initialPrompt ? { initialPrompt } : {}),
-					...(branch ? { branch } : {}),
-					...(typeof request.config?.thinking === "boolean"
-						? { thinking: request.config.thinking }
-						: {}),
-					...(reasoningEffort ? { reasoningEffort } : {}),
-					...(typeof requestedAutoApprove === "boolean"
-						? { autoApproveTools: requestedAutoApprove }
-						: {}),
-				});
-			}
-			case "attach":
-				if (!sessionId) throw new Error("sessionId is required");
-				return await cloud.attach(sessionId);
-			case "send": {
-				if (!sessionId) throw new Error("sessionId is required");
-				if (request.attachments?.userFiles?.length) {
-					throw new Error(
-						"File attachments are not supported in cloud sessions",
-					);
-				}
-				const prompt = request.prompt?.trim() ?? "";
-				if (
-					!prompt &&
-					!request.attachments?.userImages?.some((image) => image.trim())
-				) {
-					throw new Error("prompt or image is required");
-				}
-				const modelId = String(
-					request.config?.model ?? request.config?.modelId ?? "",
-				).trim();
-				return await cloud.send(
-					sessionId,
-					prompt,
-					request.delivery,
-					modelId || undefined,
-					request.attachments?.userImages,
-				);
-			}
-			case "stop":
-			case "abort":
-				if (!sessionId) throw new Error("sessionId is required");
-				return await cloud.abort(sessionId);
-			case "pending_prompts":
-				if (!sessionId) throw new Error("sessionId is required");
-				return await cloud.pendingPrompts(sessionId);
-			case "steer_prompt": {
-				const promptId = request.promptId?.trim();
-				if (!sessionId || !promptId)
-					throw new Error("sessionId and promptId are required");
-				return await cloud.updatePendingPrompt(sessionId, promptId, {
-					delivery: "steer",
-				});
-			}
-			case "update_pending_prompt": {
-				const promptId = request.promptId?.trim();
-				const prompt = request.prompt?.trim();
-				if (!sessionId || !promptId)
-					throw new Error("sessionId and promptId are required");
-				if (!prompt) throw new Error("prompt is required");
-				return await cloud.updatePendingPrompt(sessionId, promptId, {
-					prompt,
-				});
-			}
-			case "remove_pending_prompt": {
-				const promptId = request.promptId?.trim();
-				if (!sessionId || !promptId)
-					throw new Error("sessionId and promptId are required");
-				return await cloud.removePendingPrompt(sessionId, promptId);
-			}
-			default:
-				throw new Error(
-					`${request.action} is not supported for cloud sessions yet`,
-				);
-		}
+	const requestedIds = [
+		request.sessionId,
+		request.config?.sessionId,
+		request.config?.session_id,
+	];
+	if (
+		executionTarget === "cloud" ||
+		requestedIds.some(
+			(id) =>
+				typeof id === "string" &&
+				isDesktopCloudSession(
+					ctx,
+					id.trim(),
+					readEnvironmentId(request.config),
+				),
+		)
+	) {
+		return rejectClineAccount();
 	}
 	const handler = ACTION_HANDLERS[request.action];
 	if (!handler) throw new Error("unsupported action");

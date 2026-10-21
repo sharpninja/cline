@@ -1,9 +1,9 @@
+import { validateStoragePath } from "@cline/shared/storage"
 import { HookInfo, HooksToggles, WorkspaceHooks } from "@shared/proto/cline/file"
 import fs from "fs/promises"
-import os from "os"
 import path from "path"
 import { HostProvider } from "@/hosts/host-provider"
-import { resolveExistingHookPath, VALID_HOOK_TYPES } from "../../hooks/utils"
+import { resolveExistingHookPath, resolveHooksDirectory, VALID_HOOK_TYPES } from "../../hooks/utils"
 import { Controller } from ".."
 
 export async function refreshHooks(
@@ -11,7 +11,7 @@ export async function refreshHooks(
 	_request?: any,
 	globalHooksDirOverride?: string,
 ): Promise<HooksToggles> {
-	const globalHooksDir = globalHooksDirOverride || path.join(os.homedir(), "Documents", "Cline", "Hooks")
+	const globalHooksDir = await resolveHooksDirectory(true, undefined, globalHooksDirOverride)
 	const isWindows = process.platform === "win32"
 
 	// Collect global hooks
@@ -69,6 +69,7 @@ export async function refreshHooks(
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
+	validateStoragePath(filePath)
 	if (process.platform === "win32") {
 		// On Windows, files are "enabled" if they exist
 		// TODO(PR-9552 follow-up): Replace this temporary file-exists behavior
@@ -77,9 +78,11 @@ async function isExecutable(filePath: string): Promise<boolean> {
 	}
 
 	try {
-		await fs.access(filePath, fs.constants.X_OK)
+		await fs.access(validateStoragePath(filePath), fs.constants.X_OK)
+		validateStoragePath(filePath)
 		return true
 	} catch {
+		validateStoragePath(filePath)
 		return false
 	}
 }

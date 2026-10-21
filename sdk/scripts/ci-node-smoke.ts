@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const bunCommand = process.platform === "win32" ? "bun.exe" : "bun";
 
 async function runCommand(
 	cmd: string[],
@@ -76,8 +76,8 @@ async function main(): Promise<void> {
 	const packDir = await mkdtemp(join(tmpdir(), "cline-node-smoke-packs-"));
 	const smokeDir = await mkdtemp(join(tmpdir(), "cline-node-smoke-"));
 	const sessionsDir = await mkdtemp(join(tmpdir(), "cline-node-sessions-"));
-	const npmCacheDir = await mkdtemp(join(tmpdir(), "cline-node-npm-cache-"));
-	const npmEnv = { npm_config_cache: npmCacheDir };
+	const bunCacheDir = await mkdtemp(join(tmpdir(), "cline-node-bun-cache-"));
+	const bunEnv = { BUN_INSTALL_CACHE_DIR: bunCacheDir };
 
 	try {
 		console.log("Packing smoke-test tarballs with Bun...");
@@ -108,9 +108,15 @@ async function main(): Promise<void> {
 						"@cline/llms": `file:${tarballs.llms}`,
 						"@cline/shared": `file:${tarballs.shared}`,
 					},
-					...(rootPackageJson.overrides
-						? { overrides: rootPackageJson.overrides }
-						: {}),
+					// Bun distinguishes a file dependency from the same published
+					// version. Force transitive SDK edges to these exact tarballs too.
+					overrides: {
+						...rootPackageJson.overrides,
+						"@cline/core": `file:${tarballs.core}`,
+						"@cline/agents": `file:${tarballs.agents}`,
+						"@cline/llms": `file:${tarballs.llms}`,
+						"@cline/shared": `file:${tarballs.shared}`,
+					},
 				},
 				null,
 				2,
@@ -118,9 +124,9 @@ async function main(): Promise<void> {
 		);
 
 		console.log("Installing smoke-test dependencies...");
-		await runCommand([npmCommand, "install"], {
+		await runCommand([bunCommand, "install", "--ignore-scripts"], {
 			cwd: smokeDir,
-			env: npmEnv,
+			env: bunEnv,
 			timeoutMs: 10 * 60_000,
 		});
 
@@ -149,7 +155,7 @@ async function main(): Promise<void> {
 		await runCommand(["node", smokeFile], {
 			cwd: smokeDir,
 			env: {
-				...npmEnv,
+				...bunEnv,
 				CLINE_DATA_DIR: sessionsDir,
 			},
 			timeoutMs: 2 * 60_000,
@@ -158,7 +164,7 @@ async function main(): Promise<void> {
 		await rm(packDir, { recursive: true, force: true });
 		await rm(smokeDir, { recursive: true, force: true });
 		await rm(sessionsDir, { recursive: true, force: true });
-		await rm(npmCacheDir, { recursive: true, force: true });
+		await rm(bunCacheDir, { recursive: true, force: true });
 	}
 }
 

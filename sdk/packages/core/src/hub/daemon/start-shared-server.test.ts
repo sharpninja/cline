@@ -34,10 +34,13 @@ const {
 }));
 
 vi.mock("@cline/shared", () => ({
+	getHubNamespace: () => undefined,
+	getHubDaemonLaunchSpec: () => undefined,
 	resolveClineBuildEnv: mockResolveClineBuildEnv,
 }));
 
 vi.mock("../discovery/defaults", () => ({
+	hasExplicitHubPort: () => Boolean(process.env.CLINE_HUB_PORT?.trim()),
 	resolveHubEndpointOptions: mockResolveHubEndpointOptions,
 }));
 

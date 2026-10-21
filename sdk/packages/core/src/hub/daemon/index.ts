@@ -10,6 +10,9 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	CLINE_RUN_AS_HUB_DAEMON_ENV,
+	getHubDaemonLaunchSpec,
+	getHubNamespace,
+	getRequiredHubPeerIdentity,
 	isBunEmbeddedModulePath,
 	isHubDaemonProcess,
 	resolveClineBuildEnv,
@@ -24,6 +27,7 @@ import {
 } from "../client";
 import {
 	clearHubDiscovery,
+	clearHubDiscoveryIfOwned,
 	compareHubBuilds,
 	createHubServerUrl,
 	getManagedHubCompatibility,
@@ -40,6 +44,7 @@ import {
 } from "../discovery";
 import {
 	type HubEndpointOverrides,
+	hasExplicitHubPort,
 	resolveHubEndpointOptions,
 } from "../discovery/defaults";
 import {
@@ -82,6 +87,7 @@ export const __test__ = {
 		retireAttemptsByUrl.clear();
 	},
 	resolveDaemonEntryArgs,
+	resolveLaunchCommand,
 };
 
 /**
@@ -194,9 +200,22 @@ async function safeProbeHubServer(
 	url: string,
 	authToken?: string,
 ): Promise<HubServerProbeRecord | undefined> {
+	const governed = !!getRequiredHubPeerIdentity();
+	if (governed && !authToken?.trim()) {
+		if (await isHubListenerAbsent(url)) return undefined;
+		throw new Error(
+			"A hub endpoint is occupied or unavailable; authenticated discovery is required before attachment.",
+		);
+	}
 	try {
-		return await probeHubServer(url, { authToken });
-	} catch {
+		const probe = await probeHubServer(url, { authToken });
+		if (governed && !probe) throw new Error("missing verified status");
+		return probe;
+	} catch (error) {
+		if (governed && !(error instanceof HubConnectionRefusedError))
+			throw new Error(
+				"Governed hub discovery refused: authenticated identity and status must match. Discovery is preserved.",
+			);
 		return undefined;
 	}
 }
@@ -207,9 +226,13 @@ async function waitForHubToRetire(
 ): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const healthy = await safeProbeHubServer(url);
-		if (!healthy?.url) {
-			return true;
+		if (getRequiredHubPeerIdentity()) {
+			// Failed authentication/identity is not evidence that the daemon stopped.
+			// Only a refused local connection proves the listener is no longer there.
+			if (await isHubListenerAbsent(url)) return true;
+		} else {
+			const healthy = await safeProbeHubServer(url);
+			if (!healthy?.url) return true;
 		}
 		await new Promise((resolve) => setTimeout(resolve, HUB_RETIRE_POLL_MS));
 	}
@@ -222,10 +245,27 @@ async function waitForHubToRetire(
  * thing: drain first, then an authenticated shutdown, SIGTERM only as a
  * last resort, and discovery cleared only once the hub is actually gone.
  */
+import {
+	HubConnectionRefusedError,
+	isHubListenerAbsent,
+	verifyHubPeerIdentity,
+} from "../peer-identity";
+
 export async function retireDiscoveredHub(
 	record: { url: string; authToken?: string; pid?: number },
 	discoveryPath: string,
 ): Promise<boolean> {
+	await verifyHubPeerIdentity(record.url, record.authToken);
+	const governed = !!getRequiredHubPeerIdentity();
+	// Capture the generation before any shutdown. A concurrent successor owns
+	// its discovery record even when it later reuses the same endpoint.
+	const discovered = governed
+		? await readHubDiscovery(discoveryPath)
+		: undefined;
+	const ownedGeneration =
+		discovered?.url === record.url && discovered.authToken === record.authToken
+			? discovered.hubId
+			: undefined;
 	if (!shouldAttemptRetire(record.url)) {
 		return false;
 	}
@@ -240,7 +280,12 @@ export async function retireDiscoveredHub(
 	).catch(() => false);
 	await requestHubShutdown(record.url, record.authToken).catch(() => false);
 	let retired = await waitForHubToRetire(record.url, HUB_RETIRE_TIMEOUT_MS);
-	if (!retired && record.pid && isPidAlive(record.pid)) {
+	if (
+		!getRequiredHubPeerIdentity() &&
+		!retired &&
+		record.pid &&
+		isPidAlive(record.pid)
+	) {
 		try {
 			process.kill(record.pid, "SIGTERM");
 		} catch {
@@ -252,7 +297,13 @@ export async function retireDiscoveredHub(
 	// of a hub that survived leaves a live daemon undiscoverable, recoverable
 	// only through the expected-URL probe/repair path.
 	if (retired) {
-		await clearHubDiscovery(discoveryPath).catch(() => undefined);
+		if (governed) {
+			if (ownedGeneration) {
+				await clearHubDiscoveryIfOwned(discoveryPath, ownedGeneration);
+			}
+		} else {
+			await clearHubDiscovery(discoveryPath).catch(() => undefined);
+		}
 	}
 	return retired;
 }
@@ -408,12 +459,19 @@ function resolveLaunchCommand(
 	env: NodeJS.ProcessEnv;
 } {
 	const daemonEntryPath = resolveDaemonEntryPath();
-	const execPath = process.execPath?.trim();
+	const hostLaunch = getHubDaemonLaunchSpec();
+	if (getHubNamespace() && !hostLaunch)
+		throw new Error(
+			"Host hub daemon launch is not configured. Start through the governed host executable.",
+		);
+	const execPath = hostLaunch?.launcher ?? process.execPath?.trim();
 	if (!execPath) {
 		throw new Error("unable to resolve runtime executable for hub daemon");
 	}
 	const isBunRuntime = basename(execPath).toLowerCase().includes("bun");
-	const entryArgs = resolveDaemonEntryArgs(daemonEntryPath, isBunRuntime);
+	const entryArgs = hostLaunch
+		? [...hostLaunch.argsPrefix, COMPILED_BUN_HUB_DAEMON_ARG]
+		: resolveDaemonEntryArgs(daemonEntryPath, isBunRuntime);
 	return {
 		launcher: execPath,
 		args: [
@@ -511,11 +569,13 @@ async function ensureDetachedHubServerLocked(
 	workspaceRoot: string,
 	endpointOverrides: DetachedHubOptions = {},
 ): Promise<DetachedHubResolution> {
+	if (getHubNamespace())
+		endpointOverrides = { ...endpointOverrides, allowPortFallback: false };
 	const hasExplicitEndpoint =
 		endpointOverrides.host !== undefined ||
 		endpointOverrides.port !== undefined ||
 		endpointOverrides.pathname !== undefined ||
-		!!process.env.CLINE_HUB_PORT?.trim();
+		hasExplicitHubPort();
 	const endpoint = resolveHubEndpointOptions(endpointOverrides);
 	const expectedUrl = createHubServerUrl(
 		endpoint.host,
@@ -530,7 +590,8 @@ async function ensureDetachedHubServerLocked(
 		}
 		return result;
 	};
-	await retireLegacySharedHub(owner).catch(() => undefined);
+	if (!getRequiredHubPeerIdentity())
+		await retireLegacySharedHub(owner).catch(() => undefined);
 	const discovered = await readHubDiscovery(owner.discoveryPath);
 	// The npm package's postinstall sets the discovery record aside (same
 	// ".superseded" suffix) so pre-3.0.55 updaters cannot restart a busy hub.
@@ -582,11 +643,26 @@ async function ensureDetachedHubServerLocked(
 					});
 				}
 			} else {
-				await clearHubDiscovery(owner.discoveryPath).catch(() => undefined);
+				if (getRequiredHubPeerIdentity()) {
+					if (
+						!(await clearHubDiscoveryIfOwned(
+							owner.discoveryPath,
+							discovered.hubId,
+						))
+					)
+						throw new Error(
+							"Hub discovery changed during recovery. Retry using its current owner.",
+						);
+				} else
+					await clearHubDiscovery(owner.discoveryPath).catch(() => undefined);
 			}
 		}
 	}
-	const expected = await safeProbeHubServer(expectedUrl);
+	const expectedToken = getRequiredHubPeerIdentity()
+		? [discovered, superseded].find((record) => record?.url === expectedUrl)
+				?.authToken
+		: undefined;
+	const expected = await safeProbeHubServer(expectedUrl, expectedToken);
 	if (expected?.url) {
 		const expectedForRetirement = withMatchingDiscoveryRetirementMetadata(
 			expected,
@@ -713,7 +789,11 @@ async function ensureDetachedHubServerLocked(
 				});
 			}
 		}
-		const nextExpected = await safeProbeHubServer(expectedUrl);
+		// Governed startup waits for authenticated discovery. A listening child can
+		// precede its discovery publication; health alone never authorizes attachment.
+		const nextExpected = getRequiredHubPeerIdentity()
+			? undefined
+			: await safeProbeHubServer(expectedUrl);
 		if (nextExpected?.url && !isReusableHubRecord(nextExpected)) {
 			const expectedForRetirement = withMatchingDiscoveryRetirementMetadata(
 				nextExpected,

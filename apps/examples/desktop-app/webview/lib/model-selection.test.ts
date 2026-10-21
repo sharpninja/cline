@@ -21,7 +21,7 @@ it.each([
 	expect(readExecutionTargetFromWindow()).toBe("local");
 });
 
-it("remembers the execution target and keeps Cloud and Local models separate", () => {
+it("refuses cloud preferences without replacing the explicit direct selection", () => {
 	const local = {
 		lastProvider: "openrouter",
 		lastModelByProvider: { openrouter: "local-model" },
@@ -31,13 +31,18 @@ it("remembers the execution target and keeps Cloud and Local models separate", (
 		lastModelByProvider: { cline: "cloud-model" },
 	};
 	writeModelSelectionStorageToWindow(local);
-	writeExecutionTargetToWindow("cloud");
-	writeModelSelectionStorageToWindow(cloud, "cloud");
-	expect(readExecutionTargetFromWindow()).toBe("cloud");
-	expect(readModelSelectionStorageFromWindow()).toEqual(local);
-	expect(readModelSelectionStorageFromWindow("cloud")).toEqual(cloud);
-	writeExecutionTargetToWindow("local");
-	writeModelSelectionStorageToWindow(local);
+	expect(() => writeExecutionTargetToWindow("cloud")).toThrow(
+		/unavailable in cline-qb/,
+	);
+	expect(() => writeModelSelectionStorageToWindow(cloud, "cloud")).toThrow(
+		/unavailable in cline-qb/,
+	);
 	expect(readExecutionTargetFromWindow()).toBe("local");
-	expect(readModelSelectionStorageFromWindow("cloud")).toEqual(cloud);
+	expect(readModelSelectionStorageFromWindow()).toEqual(local);
+	expect(readModelSelectionStorageFromWindow("cloud")).toEqual({
+		lastProvider: "",
+		lastModelByProvider: {},
+	});
+	writeExecutionTargetToWindow("local");
+	expect(readModelSelectionStorageFromWindow()).toEqual(local);
 });

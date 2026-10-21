@@ -630,6 +630,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		let pendingLeadTeamTools: AgentTool[] = [];
 		let restoredStateHydratedIntoRuntime = false;
 		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider({
+			configureAgentRuntime: input.configureAgentRuntime,
+			workspaceRoot: workspaceConfigRoot,
 			providerId: config.providerId,
 			modelId: config.modelId,
 			distinctId: input.distinctId,

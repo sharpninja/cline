@@ -1,3 +1,11 @@
+export {
+	getStorageNamespace,
+	registerStorageNamespace,
+	type StorageNamespace,
+	type StoragePathContext,
+	type StoragePathKind,
+	validateStoragePath,
+} from "./namespace";
 export { resolveExistingFilePath } from "./path-resolution";
 export {
 	AGENT_CONFIG_DIRECTORY_NAME,
