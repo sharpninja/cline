@@ -1,0 +1,182 @@
+[
+  {
+    "id": "namespace-recheck",
+    "planLines": "199",
+    "criterion": "P0-AC-008",
+    "namedCheck": "namespace-recheck",
+    "observable": "Current unique namespace, no invented historical receipt",
+    "evidence": "namespace-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "fr-tr-content",
+    "planLines": "199,205-352",
+    "criterion": "P0-AC-008",
+    "namedCheck": "fr-tr-content",
+    "observable": "Full FR/TR text and structured acceptance criteria",
+    "evidence": "record-content-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "test-records",
+    "planLines": "199,205-352",
+    "criterion": "P0-AC-008",
+    "namedCheck": "test-records",
+    "observable": "All TEST records carry exact AC text and owner",
+    "evidence": "record-content-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "mappings",
+    "planLines": "199,396-416",
+    "criterion": "P0-AC-008",
+    "namedCheck": "mappings",
+    "observable": "80 exact plan-derived edges, no dangling ends",
+    "evidence": "record-content-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "usecase-details",
+    "planLines": "199,353-392",
+    "criterion": "P0-AC-007",
+    "namedCheck": "usecase-details",
+    "observable": "13 full actor/flow/pre/post/link comparisons",
+    "evidence": "usecase-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "usecase-aliases",
+    "planLines": "199,353-392",
+    "criterion": "P0-AC-007",
+    "namedCheck": "usecase-aliases",
+    "observable": "13 approved UC aliases bound to canonical IDs",
+    "evidence": "usecase-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "record-task-evidence-links",
+    "planLines": "199",
+    "criterion": "P0-AC-011",
+    "namedCheck": "record-task-evidence-links",
+    "observable": "TODO FR/TR links, phase tasks, record plan/owner notes and evidence pointers",
+    "evidence": "record-content-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "freeze-contracts-defaults",
+    "planLines": "199",
+    "criterion": "P0-AC-012",
+    "namedCheck": "freeze-contracts-defaults",
+    "observable": "Approved plan digest unchanged, corrective criteria administrative only",
+    "evidence": "self-check.json",
+    "slice": "P0"
+  },
+  {
+    "id": "supported-admin-writes",
+    "planLines": "199,500",
+    "criterion": "P0-AC-012",
+    "namedCheck": "supported-admin-writes",
+    "observable": "Existing populate/update scripts use installed wrapper; r3 update and exact readback",
+    "evidence": "todo-update-verification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "readonly-baseline-resolution",
+    "planLines": "498",
+    "criterion": "P0-AC-001",
+    "namedCheck": "readonly-baseline-resolution",
+    "observable": "Measured read-only resolution agrees with original identity; original timing evidence bounded",
+    "evidence": "baseline-resolution.json",
+    "slice": "P0"
+  },
+  {
+    "id": "canonical-baseline",
+    "planLines": "7,498",
+    "criterion": "P0-AC-001",
+    "namedCheck": "canonical-baseline",
+    "observable": "Fresh canonical remaining contains exact B0 and receipt pointer",
+    "evidence": "todo-after-update.json",
+    "slice": "P0"
+  },
+  {
+    "id": "gate-matrix-and-observations",
+    "planLines": "441,459-478",
+    "criterion": "P0-AC-005",
+    "namedCheck": "gate-matrix-and-observations",
+    "observable": "Every matrix row executed or blocked; every nonpassing case has reason/disposition",
+    "evidence": "gate-matrix-coverage.json",
+    "slice": "P0"
+  },
+  {
+    "id": "dependency-install-lifecycle",
+    "planLines": "460",
+    "criterion": "P0-AC-006",
+    "namedCheck": "dependency-install-lifecycle",
+    "observable": "Frozen ignore-scripts replay, unchanged lock, every B0 lifecycle entry disposed",
+    "evidence": "lifecycle-decisions.json",
+    "slice": "P0"
+  },
+  {
+    "id": "command-chain-audit",
+    "planLines": "432,457,477",
+    "criterion": "P0-AC-013",
+    "namedCheck": "command-chain-audit",
+    "observable": "Unsupported chains named with P1 replacement; resolved cases retain proof",
+    "evidence": "command-chain-dispositions.json",
+    "slice": "P0"
+  },
+  {
+    "id": "proto-lint-separation",
+    "planLines": "457",
+    "criterion": "P0-AC-013",
+    "namedCheck": "proto-lint-separation",
+    "observable": "Separate non-writing checks and separate preparation evidence",
+    "evidence": "../baseline-proto-checks.json",
+    "slice": "P0"
+  },
+  {
+    "id": "runner-inventory",
+    "planLines": "481",
+    "criterion": "P0-AC-002",
+    "namedCheck": "runner-inventory",
+    "observable": "All manifests/runner scripts/configs classified, actual aliases distinguished",
+    "evidence": "runner-classification.json",
+    "slice": "P0"
+  },
+  {
+    "id": "package-script-map",
+    "planLines": "102",
+    "criterion": "P0-AC-002",
+    "namedCheck": "package-script-map",
+    "observable": "Manifest ownership and no-suite fallback explicit",
+    "evidence": "package-to-script-map.json",
+    "slice": "P0"
+  },
+  {
+    "id": "environment-and-roots",
+    "planLines": "106",
+    "criterion": "P0-AC-003",
+    "namedCheck": "environment-and-roots",
+    "observable": "Direct/indirect settings distinguished from symbols, distinct resolved root families",
+    "evidence": "upstream-root-families.json",
+    "slice": "P0"
+  },
+  {
+    "id": "supported-read-interfaces",
+    "planLines": "26,36,132",
+    "criterion": "P0-AC-004",
+    "namedCheck": "supported-read-interfaces",
+    "observable": "Supported reads and item 10 decision documented",
+    "evidence": "read-interface-inventory.json",
+    "slice": "P0"
+  },
+  {
+    "id": "baseline-omissions",
+    "planLines": "477,481",
+    "criterion": "P0-AC-014",
+    "namedCheck": "baseline-omissions",
+    "observable": "Governance not present at B0; Node smoke blocked until compliant P1 replacement",
+    "evidence": "gate-matrix-coverage.json",
+    "slice": "P0"
+  }
+]
