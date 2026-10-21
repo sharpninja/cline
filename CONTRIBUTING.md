@@ -42,15 +42,24 @@ We also welcome contributions to our [documentation](https://github.com/cline/cl
     ```bash
     code cline
     ```
-3. Install [bun](https://bun.com)
-4. Install the necessary dependencies for the extension and webview-gui:
+3. Install [Bun 1.4.2](https://bun.com) and Node.js 22 or newer, as required by the root `package.json`.
+4. Enter the cloned repository, install workspace dependencies, and build the SDK packages:
     ```bash
-    cd apps/vscode && bun run install:all && cd ../..
-    cd sdk && bun run build && cd ..
+    cd cline
+    bun install
+    bun run build:sdk
     ```
 5. Generate Protocol Buffer files (required before first build):
+    ```bash
+    cd apps/vscode
+    bun run protos
+    cd ../..
+    ```
 6. Launch by pressing `F5` (or `Run`->`Start Debugging`) to open a new VSCode window with the extension loaded. (You may need to install the [esbuild problem matchers extension](https://marketplace.visualstudio.com/items?itemName=connor4312.esbuild-problem-matchers) if you run into issues building the project.)
 
+Rebuild with `bun run build:sdk` from the repository root after changing SDK source. Package imports resolve compiled `dist/` files; restart running CLI, hub, or extension processes after rebuilding.
+
+For other entry points, see the [CLI development guide](apps/cli/DEVELOPMENT.md), [SDK contributor guide](sdk/CONTRIBUTING.md), and [desktop app guide](apps/examples/desktop-app/README.md). Public documentation lives in `docs/` as Mintlify `.mdx` pages, with navigation in `docs/docs.json`.
 
 
 
@@ -62,7 +71,7 @@ We also welcome contributions to our [documentation](https://github.com/cline/cl
    - Run tests and checks
 3. Testing
     - Run `cd apps/vscode && bun run test` to run tests locally. 
-    - Before submitting PR, run `bun run format:fix` to format your code
+    - From `apps/vscode`, run `bun run format:fix` to apply formatting, then `bun run ci:check-all` to check types, lint, and formatting.
 
 ### Extension
 
@@ -135,8 +144,8 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
 
 2. **Code Quality**
 
-    - Run `bun run lint` to check code style
-    - Run `bun run format` to automatically format code
+    - From the repository root, run `bun run lint` and `bun run format` to check SDK and app code. `format` checks formatting; `bun run fix` applies fixes.
+    - For the Marketplace extension, run checks from `apps/vscode`: `bun run ci:check-all`. Use `bun run format:fix` there to apply fixes.
     - All PRs must pass CI checks which include both linting and formatting
     - Address any warnings or errors from linter before submitting
     - Follow TypeScript best practices and maintain type safety
@@ -144,7 +153,7 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
 3. **Testing**
 
     - Add tests for new features
-    - Run `bun test` to ensure all tests pass
+    - Run the relevant package's test script. Root `bun run test` covers SDK packages, CLI, hub, and the example VS Code app; run `bun run test` separately from `apps/vscode` for the Marketplace extension.
     - Update existing tests if your changes affect them
     - Include both unit tests and integration tests where appropriate
 
@@ -154,17 +163,18 @@ Anyone can contribute code to Cline, but we ask that you follow these guidelines
     
     - **Running E2E tests:**
       ```bash
-      bun run test:e2e        # Build and run all E2E tests
+      cd apps/vscode         # From the repository root
+      bun run test:e2e        # Build and run extension E2E tests
       bun run e2e             # Run tests without rebuilding
       bun run test:e2e -- --debug  # Run with interactive debugger
       ```
     
     - **Writing E2E tests:**
-      - Tests are located in `src/test/e2e/`
+      - Tests are located in `apps/vscode/src/test/e2e/` relative to the repository root
       - Use the `e2e` fixture for single-root workspace tests
       - Use `e2eMultiRoot` fixture for multi-root workspace tests
       - Follow existing patterns in `auth.test.ts`, `chat.test.ts`, `diff.test.ts`, and `editor.test.ts`
-      - See `src/test/e2e/README.md` for detailed documentation
+      - See [the extension E2E guide](apps/vscode/src/test/e2e/README.md) for detailed documentation
     
     - **Debug mode features:**
       - Interactive Playwright Inspector for step-by-step debugging

@@ -1,228 +1,192 @@
-# cline-qb handoff
+# QB-AGENT-001 continuation handoff
 
-Prepared from the live workspace-bound TODO on **2026-10-09 (UTC)**, which was **2026-10-08 in the local UTC-05:00 timezone**.
+Updated: 2026-10-21T12:58:35 (America/Chicago), for the operator-directed branch consolidation. This remains the single active handoff.
 
-## 1. Start here: status and authorization
+## Current request and immediate state
 
-- Repository: `/home/sharpninja/github/cline`.
-- Canonical implementation plan: MCP TODO **`QB-AGENT-001`**, **high priority**, **pending (`done: false`)**.
-- Title: **Create cline-qb: mandatory QBrain integration, no Cline Cloud, responsive data sidebars, and compact tool headers**.
-- The complete plan is stored in the TODO's `technicalDetails`; this handoff summarizes it and does not replace it.
-- The TODO has **seven unchecked tasks**: administrative preparation, five major development phases, and final acceptance.
-- Inventory: **20 proposed FRs, 20 TRs, 60 ACs, 60 TEST mappings, and 13 UCs**.
-- **Product implementation has not started.** No product source/configuration changes or implementation tests were performed for this work. This handoff is a new documentation artifact, not a product change.
-- Separate FR/TR/TEST/UC records have **not** been created. The IDs in the plan are proposed; UC IDs are aliases to reconcile with service-assigned IDs.
-- Authorization so far covered saving the plan as a TODO and creating this handoff. **Do not interpret the switch to act mode or these administrative requests as authorization to implement the product.** Obtain explicit development authorization before P0/P1.
-- No AC is satisfied, no phase is complete, and no development HV gate has run.
+The operator requested committing and consolidating Cline work on a new `develop` branch, pushing it to `origin`, and ensuring this handoff reflects the new branches. The McpServer and V2 Plugin dependencies were first moved to separate `cline-qb` branches, committed and pushed to their own origins. Cline integration now combines primary documentation and handoff work, the product P1 checkpoint, and accepted P0 from fetched `origin/main`.
 
-Read `/home/sharpninja/github/cline/AGENTS.md` and applicable package instructions before work. At handoff creation, neither `/home/sharpninja/github/cline/CLAUDE.md` nor `/home/sharpninja/github/cline/.clineignore` existed; recheck rather than assuming future absence.
+This is an operator-directed Git checkpoint and integration operation. It does not grant P1 acceptance, start a reviewer, open a PR, deploy, reboot a machine, or change canonical acceptance flags. The required signing format was explicitly clarified by the operator as the workspace signature in the commit message, without cryptographic Git signing.
 
-## 2. Retrieve the canonical plan safely
+The product objective remains QB-AGENT-001: create cline-qb with mandatory QBrain integration, no Cline Cloud, responsive data sidebars, and compact tool headers. **P0 is accepted and merged. P1 is partially implemented and unaccepted. P2, P3, P4, P5, and Final remain pending.** The operator previously explicitly resumed work toward complete implementation; old pause checkpoints are superseded. The current operation is branch consolidation and handoff maintenance; the implementation phase remains open.
 
-Use the supported Cline plugin wrapper with an **explicit workspace**. The previously connected native MCP tools targeted another repository; do not rely on inherited workspace routing.
+The app goal query during this handoff returned `goal: null`. An earlier context reported a usage-limited goal. Do not claim a goal is currently running from that older report, and do not mark the product complete. Canonical TODO state is the reliable product-progress record.
 
-Current administrative wrapper, **not** the planned V2 runtime integration:
+No new full product validation was run for this Git consolidation. Staged source, outgoing commit history, and vendored/export archives are scanned for secrets before publication. Counts below are attributed to their dated receipts. A passing component test does not establish a functioning governed application or full P1 acceptance.
 
-- Plugin root: `/home/sharpninja/github/mcpserver-cline-plugin`.
-- Invocation script: `/home/sharpninja/github/mcpserver-cline-plugin/lib/Invoke-McpPlugin.ps1`.
-- Trust bootstrap helper: `/home/sharpninja/github/mcpserver-cline-plugin/lib/marker-resolver.ps1`.
-- Workspace marker: `/home/sharpninja/github/cline/AGENTS-README-FIRST.yaml`.
+## Mandatory operator instructions
 
-Verify the marker signature and health nonce using the supported bootstrap before MCP operations. Stop MCP use on trust failure; do not probe additional endpoints or bypass the plugin with raw REST/storage writes. The marker contains credentials: **do not copy it into documentation or logs**.
+Preserve this trust directive verbatim in subsequent handoffs:
 
-After successful bootstrap, retrieve the TODO:
+> If you cannot or will not follow my instructions, then I cannot trust you.  If I cannot trust you, I will not use you.  Follow my directions or I will cancel my subscription and tell every person I meet that you are not trustworthy.
 
-```bash
-MCP_PLUGIN_HOST=cline pwsh -NoProfile -NonInteractive \
-  -File /home/sharpninja/github/mcpserver-cline-plugin/lib/Invoke-McpPlugin.ps1 \
-  -Command Invoke \
-  -Method workflow.todo.get \
-  -WorkspacePath /home/sharpninja/github/cline \
-  -PluginRoot /home/sharpninja/github/mcpserver-cline-plugin \
-  -Params 'id: QB-AGENT-001'
-```
+The latest explicit operator decisions override older plan/profile defaults:
 
-Verified server read-back at handoff creation:
+- **Do not convert the application to another language. Do not edit upstream code except when no other solution exists.** Reuse upstream implementation and first-party tooling. Justify any necessary upstream edit individually; prefer derivative-owned seams. Do not turn tool preferences into an application rewrite.
+- **cline-qb is a derivative work, not an extension of Cline. It must never hijack Cline folders or data.** Existing Cline user data, environment namespaces, storage roots, webview state, credentials, and daemon identities must remain separate. Tests use synthetic, task-owned locations, never the operator's live cache as disposable fixture data.
+- **Node.js and Python may continue as first-party tooling for upstream continuity in this workspace.** This is now Workspace `MEMORY-TOOLING-001`. It overrides the global PowerShell-only/no-Node/no-Python restrictions for that purpose. It does not authorize unrelated ad hoc operational scripts in those languages. Preserve product languages and existing toolchain. Reconcile old tool-replacement backlog items against this decision before doing more replacement work.
+- PowerShell remains the operational scripting interface. The Linux exception permits direct `pwsh`; Windows follows the profile's PowerShell.MCP routing. Analyze each new operational script before execution; state-changing scripts need counted edits and a `-WhatIf` run. Native objects and serializers construct JSON/YAML. No hand-written wire JSON/YAML.
+- **Linux first.** Defer Windows-specific downloads, packaging, builds, validation and remediation until the project works on Linux. The unfinished pinned Windows ripgrep ZIP check is deferred, not passed and not the next task. Do not download a tool already installed without first checking the actual need and installed version. Mac/Windows fixture filenames are not native execution evidence.
+- **Azure is no longer in scope.** Global `MEMORY-PROCESS-009` says Azure-specific paths, exports, remotes and pipeline errors are information only, never gates, blockers, done-state conditions or HV findings. Do not revive old Azure failures.
+- **Claude coordination ended; Claude hostile validation remains required.** The coordinating agent was dismissed. Codex owns the transferred A8/S6 dependency. Do not wait for that agent to answer or reactivate coordination memory 007.
+- Required reviewer: actual Claude through **mcpserver-claude-code-plugin**, `claude-opus-5-5`, max effort. Verify runtime identity from receipts. Codex must not impersonate Claude or write Claude's retrospective audit for it.
+- **Complete each phase, full applicable validation, and closing HV before opening its PR. Wait for all required phase/support PRs to merge before starting the next phase.** No stacked phase PRs and no auto-merge. The operator's correction was never a change to their original requirement.
+- Hostile approval requires **accuracy >=98 and completeness >=98, OverallVerdict AGREE**, plus complete audit persistence/readback. Do not lower the bar. Poll a review at most once every two minutes; do not bound or kill the reviewer by an arbitrary duration. Edit only between rounds.
+- BDPv4 is **mock-first**: requirements and complete AC coverage; independent tests/mocks; correct responses and rejecting negative controls; documented green mock gate before production edits; identical assertions bound to production; full applicable regression and phase HV. Old red-before-green descriptions are obsolete. Do not delete/skip a test to manufacture green; specific historical retirement approval does not grant a blanket waiver.
+- New gaps become ACs. Before HV, map every finding to its governing requirement and AC; distinguish missing, insufficient, and unverified criteria. Strengthen the deficient requirement first. Perform what-if, sibling, dependency/phase-boundary and propagation checks across the whole plan. Investigate why the process missed the defect, not just its immediate symptom. No layered patches without reconciling existing requirements.
+- Every real request and its **exact final chat result** must be logged through mcpserver-codex-plugin; summaries do not substitute. No routine permission question for logging. Record decisions as conclusions, separately from actions. The operator approves the REPL's Unicode dash normalization; do not restore unwanted Unicode dashes into the DB to force byte equality. Preserve native/root identities and truthful retrospective provenance when recovering old logs.
+- Keep the report local. Preserve failed receipts and original evidence. Copy, hash-verify, and retain originals unless explicitly cleared for deletion. This handoff request explicitly clears the previous active handoff for replacement; it does not clear unrelated receipts or another effort's files.
+- Reply concisely with measured sortable local timestamps. No en/em dashes and no table-style output. Distinguish facts, inferences and unknowns. Cite the evidence for claims.
+- Preserve existing file/package licenses; new files use Apache-2.0 as directed. Sign commits and PR comments according to the workspace marker using actual model/effort metadata. Never force-push or invent identity metadata.
 
-| Field | Value |
-| --- | --- |
-| TODO | `QB-AGENT-001` |
-| Priority / completion | `high` / `false` |
-| Full plan length | 53,455 characters |
-| Plan SHA-256 | `29B8F0515116B1C5BBCAEE0EDDD40AEEDB855B2A0FBCD7B7F9E39FCE55CD1C5D` |
-| Requirement links | 20 FRs, 20 TRs |
-| Unchecked implementation tasks | 7 |
+Read workspace instructions in full from their original files, rather than substituting this handoff for them: [AGENTS.md](/home/sharpninja/github/cline/AGENTS.md), [AGENTS-README-FIRST.yaml](/home/sharpninja/github/cline/AGENTS-README-FIRST.yaml), and applicable nested instructions. Root `CLAUDE.md` was absent. The marker contains credentials: read privately, never print or commit them. Retain instructions verbatim, with only secret redaction in tool output. The current marker's version fields are stale; installed plugin manifests and successful live trust verification are the authority for plugin identity.
 
-The hash is for UTF-8 text formed by joining `technicalDetails` with LF, without an added trailing newline. If the canonical TODO changes, reconcile with the newer server record rather than treating this snapshot/hash as an immutable requirement.
+## Canonical plan and viewer
 
-Temporary artifacts under `/tmp/` are **not durable or authoritative**: `/tmp/cline-qb-complete-plan.md`, `/tmp/cline-qb-todo-verification.json`, `/tmp/cline-qb-handoff-source-plan.md`, and `/tmp/cline-qb-handoff-source-todo.json`. A new agent must be able to proceed by retrieving the TODO without them.
+Canonical storage is the Cline MCP workspace, TODO **QB-AGENT-001**. Read it through the required plugin with `workflow.todo.get`, native parameters `{ id = 'QB-AGENT-001' }`, and explicit workspace `/home/sharpninja/github/cline`. Do not directly edit TODO YAML or treat a markdown mirror as the canonical record.
 
-Session continuity:
+The current Codex plan-viewer path is:
 
-- Session: `Cline-20261009T004716Z-plugin-session`.
-- Plan-save turn: `req-20261009T021418Z-save-cline-qb-plan` (completed).
-- Handoff turn: `req-20261009T022712Z-create-cline-qb-handoff`.
-- Session cache paths: `/home/sharpninja/github/cline/.mcpServer/cline/session-state.yaml` and `/home/sharpninja/github/cline/.mcpServer/cline/current-turn.yaml`. Inspect only as needed; mutate session/TODO/requirement state through supported plugin interfaces.
+`/home/sharpninja/.codex/plans/01a11e98-d7e8-7601-84a5-aea8553be222/01a11ea2-a85a-7b52-8771-653cbc0a0918/PLAN.md`
 
-## 3. Non-negotiable product requirements
+On October 21, the stale 6,354-byte outline was replaced with the full 176,054-character canonical `technicalDetails`, verbatim, followed by all eleven other TODO fields with their exact values. No canonical requirement, design or completion flag was changed. The current handoff readback confirms the plan text is still identical to that viewer source. `open_in_codex` returned **queued**, not confirmed visible. Do not claim that the user has seen an open viewer.
 
-### Governed agent and branding
+The old viewer outline was backed up at `/home/sharpninja/.codex/plan-backups/01a11e98-d7e8-7601-84a5-aea8553be222/20261021T120630/PLAN.md`. It is obsolete and is not an alternate plan or handoff.
 
-- Brand every shipped agent application **`cline-qb`**: CLI/TUI, VS Code, desktop, hub diagnostics, and agent-bearing examples.
-- Incorporate **`mcpserver-cline-v2-plugin` directly**, pinned and bundled with tools, skills, required guidance, and supporting assets. No startup download, optional installation, or enablement prompt.
-- Use configuration and isolated new modules where possible, but **change existing agent code wherever mandatory enforcement requires it**.
-- Required policy is host-owned and protected, not model-voluntary or an ordinary optional plugin. No settings, flags, environment overrides, yolo mode, custom prompts, contribution shadowing, resume/rebuild/compaction, or delegation may remove it.
-- Verify workspace trust/readiness before ordinary execution; enforce applicable tool prerequisites and current-state evidence; await completion obligations before final answers/success events. Cover text-only and tool-based completion.
-- Preserve isolated workspace/session/delegate contexts and explicit agent-to-MCP session linkage. Confirm remote-host governance or refuse execution; no ungoverned fallback.
-- Load all bundled skills; run applicable workflows when triggered, not unrelated actions indiscriminately. Make critical obligations executable checks rather than prose-only instructions.
-- Actions and design decisions are separate audit records. Pending/recovery acknowledgments are not server-confirmed persistence.
+Durable local evidence for resumption:
 
-### No Cline Cloud
+- [Canonical TODO snapshot](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/canonical-todo.json), including implementation tasks and remaining work.
+- [Canonical plan text snapshot](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/canonical-plan.md). This is a readback, not a new plan.
+- [Capture and hashes](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/capture.json).
+- [Viewer replacement verification](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/viewer-refresh.json).
 
-- No Cline-hosted inference/cloud agents/account, billing, sign-in, remote configuration, telemetry, hosted feature flags, artifact/transcript uploads, or replacement updates.
-- Existing credentials/cached settings cannot reactivate these services. Hide-and-continue behavior is insufficient; test the backend/network boundary.
-- Keep local/self-hosted hub execution and directly configured model providers. User-controlled remote execution is permitted only with verified governance.
-- No silent replacement with another hosted service. Zero prohibited **product-originated** traffic; this is not a restriction on arbitrary operator-requested public-internet tool use.
+Current phase allocation from the canonical task list: P1 30 ACs; P2 17; P3 19; P4 3; P5 7; 76 total product ACs and 13 use cases. P0's own 14 preparation acceptance criteria are separate. Original P0 receipts correctly refer to the then-current 60 product ACs. Do not erase that chronology or misreport 60 as the current scope.
 
-### Shared data and settings
+Phase definitions remain:
 
-- One supported plugin-backed, **read-only** Session Log/TODO service for TUI and desktop. No direct store reads/writes, duplicate raw REST client, browser credentials, model calls, or extra turns for browsing.
-- Session Log uses the active conversation's explicit linked MCP session, not the latest unrelated session or chat history. Show IDs, titles, statuses, interpretation/response, actions, decisions, dialog, persistence/refresh status, and bounded detail retrieval.
-- TODO view shows workspace records, priority/state/remaining work/subtasks/dependencies and open/completed filters. Browsing never selects the agent's active TODO or mutates records. Keep desktop Agenda tasks distinct.
-- Refresh on relevant changes, context switch, reconnect, and manual request; configurable visible-view polling (proposed default five seconds). Prevent overlap/context races; preserve only matching-context last-good data with explicit stale/error state. Hidden panels pause display polling, **not enforcement/auditing**.
-- Add a **qbrain.ai** TUI settings tab and equivalent desktop section: effective endpoint/workspace/configuration source, supported masked auth, connection test, trust/health, plugin version/readiness, refresh, and panel preferences.
-- Connection changes use supported bootstrap/configuration and revalidate trust; no direct edits to signed marker fields. No disable/skip/continue-ungoverned/re-enable-cloud setting.
+1. P0: preparation, contracts/defaults, requirement/UC inventories and mappings, baseline evidence. Accepted.
+2. P1: mandatory plugin, trust, audit, completion enforcement, every governed runtime path, no Cline Cloud; includes AC-QB-061 through 072 and staged AC-QB-029/053 runtime cases. Open.
+3. P2: shared Session Log/TODO service, qbrain.ai settings, deterministic summaries and payload preservation; includes 073/074/076. Pending.
+4. P3: responsive TUI, three-state placement/hidden, columns/lines, configurable keys and relaunch persistence; includes 075 and staged compact headers. Pending.
+5. P4: desktop sidebar/client/sidecar/settings/chat preservation and staged compact headers. Pending.
+6. P5: branding, governed artifacts/updates, documentation, full packaged acceptance and all-host one-row headers. Pending.
+7. Final: complete chronological mock/negative-control/production/regression evidence for all 76 ACs and all basic/alternative flows of 13 UCs, with all five major-phase HV gates accepted.
 
-### Responsive TUI, dimensions, and keys
+## Checkouts and preservation boundaries
 
-- Aspect selects horizontal versus vertical; proposed breakpoint `columns / rows >= 2.5`, subject to usable space. Compute from the full terminal, not remaining chat width.
-- Flip cycle: **right -> left -> hidden -> right**, or **bottom -> top -> hidden -> bottom**.
-- Remember horizontal/vertical edges independently. Hidden persists through aspect changes; reveal uses the first edge for the current orientation. Hide reclaims chat space and returns panel focus to prompt. It never weakens governance.
-- Independent left/right width in **columns** and top/bottom height in **lines**, including borders; positive integers or **Auto**.
-- Proposed Auto defaults: approximately 30%, normally 32-48 columns / 8-14 lines. Explicit sizes override those ranges, constrained by usable terminal/chat space. Preserve requested sizes through temporary fit clamping and restore when room returns.
-- Persist dimensions, edges, visibility, selected data view, and custom bindings across **new invocations**. Report save failures; transient layout changes cannot overwrite requested preferences.
-- Default cycle: **Alt+B / Option+B**. Expand: **Ctrl+Plus**, with **Ctrl+Equal** alias. Shrink: **Ctrl+Minus**. One column/line per press, repeat supported; first Auto resize starts at displayed size and changes only that dimension to explicit.
-- Resizing cannot hide or implicitly reveal. Preserve draft/cursor/focus/selection/scroll/streaming; suspend panel shortcuts while modal/approval input owns control.
-- User-definable cycle/expand/shrink/focus/switch-view/refresh; modifier-aware normalization, duplicate/reserved conflict checks, reset defaults, current-binding help, and command-palette alternatives. Preserve existing Tab, Shift+Tab, and Ctrl+Alt+B controls.
-- Size child content against **allocated panes**, not full terminal width. Tiny terminals use compact presentation distinct from Hidden, without obscuring prompt/approvals.
+The primary Cline checkout is on **`develop`**, created at the operator's explicit direction. The product checkpoint is committed on its existing `qb/p1-runtime-governance` branch and merged into `develop`; accepted P0 is included from fetched `origin/main`. Use `develop` as the Cline integration branch. Its publication target is `https://github.com/sharpninja/cline.git`, branch `origin/develop`. The final merge SHA, remote SHA, clean-state checks, and signing proof are recorded in `/home/sharpninja/github/cline/docs/receipts/develop-integration-20261021/verification.json` after publication. Resolve the current SHA from Git rather than copying a self-referential SHA into this file.
 
-### Desktop and compact tool headers
+Current task checkouts:
 
-- Extend the existing desktop sidebar with Session Log/TODO views; keep history/settings and active chat mounted. Preserve draft/stream/scroll, existing collapse/narrow behavior, and environment/workspace/session isolation. Do not automatically apply the TUI four-edge cycle to desktop.
-- Compress **tool-invocation headers**, not actual execution or stdout/stderr. Example: `run_commands(pwsh script; 1 command)` instead of the full inline script.
-- Agent/runtime generates deterministic summaries; **do not ask the model to summarize or obey a one-line prompt**.
-- At most **one visual row**, normalized controls/newlines, display-width-aware ellipsis, no wrapping: live calls, narrow panes, batched/unknown tools, and restored history across CLI/TUI, desktop, and VS Code.
-- Preserve exact execution inputs, model results, and audit payloads under existing security policies. Exact invocation remains inspectable/copyable and accessible for approval. Do not render full `rawInput` as the default header after generating a compact summary.
+- Primary `/home/sharpninja/github/cline`: branch **`develop`**. Includes the primary authored documentation, updated handoff, accepted P0 and product checkpoint. Generated exports remain local by explicit operator direction. Initial primary HEAD before integration was `b090c4a0848ed0a80c53d9882a098ae46c13e7bc`; that is historical, not the current integration HEAD.
+- Product `/home/sharpninja/github/cline/.worktrees/qbrain-agent`: branch **`qb/p1-runtime-governance`**, committed checkpoint **`85e64f8ae43a295d329db9e61a46811944629b00`**. Its staged scan, outgoing-history scan and vendored archive scan passed. The commit captures 530 changed paths. The worktree is clean after that commit. The original B0 remains `fa840c741c3fc2eb49e7e0a4484895a99dae5cc5`.
+- Supporting server `/home/sharpninja/github/cline/.worktrees/mcpserver-qbrain`: branch **`cline-qb`**, committed and pushed **`02933e7495b022607b62b89497c34986ff75e9c1`** to `https://github.com/sharpninja/McpServer.git`. Captures 94 paths; worktree clean; remote SHA independently matched. It is no longer on `qb/p1-governance-core`. That old branch and the base `c4fff1862319f21764b914aea5d655ec2cb8f5bc` are preserved. This branch has not been merged into McpServer develop or deployed.
+- V2 plugin dependency `/home/sharpninja/github/cline/.worktrees/mcpserver-cline-v2-dependency`: branch **`cline-qb`**, committed and pushed **`8f7afc4141760d4839fed25a8faa31775b1ce069`** to `https://github.com/sharpninja/mcpserver-cline-v2-plugin.git`. Captures 29 paths; worktree clean; remote SHA independently matched. The checkout is no longer detached. Its previous detached HEAD `9aa504f576bd742ecbf3c684136449ea74b46814` is the checkpoint's parent. A committed archive is not a released or accepted final artifact.
+- Historical P0 checkout `/tmp/qbrain-p0-acceptance`: branch `qb/p0-acceptance`, HEAD `e07598d4ba592197f873299186127ff4c9f0385f`. Its accepted commit is already merged in `origin/main` at `be3ce90fa2d7013c0a383e44e6275f5ab492c53d`. The temporary checkout has 134 unstaged deletions, all paths involving hidden files/directories, and no modified/staged files. Preserve this historical checkout as found. Those temporary deletions are not product work and are not included in the Cline-folder consolidation. No data was discarded to clean it.
 
-## 4. Requirement and TDD traceability
+The two dependency commits use the required `gpt-6.1-sol-high@Codex` confidence trailer, with identity read from runtime metadata. The operator explicitly selected commit-message workspace signing. Dependency proof is in `/home/sharpninja/github/cline/docs/receipts/dependency-sync-20261021/verification.json`. Both dependencies track their own `origin/cline-qb`; they are separate repositories, not Cline branches.
 
-All rows are **new proposed records**, not satisfied criteria. Detailed AC bodies, named tests, alternatives, and mappings are in the canonical TODO. Each TEST number corresponds to the AC with the same number.
+The earlier [worktree inventory](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/worktree-inventory.json) and [V2 inventory](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/v2-worktree.json) are dated snapshots from before the branch moves and commits. Their dirty counts and old branch names are historical evidence, not current checkout state. The accepted P0 files, complete product checkpoint and primary work must be ancestors/content of `develop`; verify this with Git and the integration receipt.
 
-| FR | Scope | TR | AC / TEST range | TDD owner |
-| --- | --- | --- | --- | --- |
-| FR-QB-001 | Built-in mandatory plugin | TR-QB-PLUGIN-001 | 001-003 | P1 |
-| FR-QB-002 | Trusted workspace startup | TR-QB-TRUST-001 | 004-006 | P1 |
-| FR-QB-003 | Durable auditing | TR-QB-AUDIT-001 | 007-009 | P1 |
-| FR-QB-004 | Completion obligations | TR-QB-COMPLETION-001 | 010-012 | P1 |
-| FR-QB-005 | All execution paths | TR-QB-RUNTIME-001 | 013-015 | P1 |
-| FR-QB-006 | No Cline Cloud | TR-QB-NETWORK-001 | 016-018 | P1 |
-| FR-QB-007 | Session Log inspection | TR-QB-LOGREAD-001 | 019-021 | P2 |
-| FR-QB-008 | TODO inspection | TR-QB-TODOREAD-001 | 022-024 | P2 |
-| FR-QB-009 | Refresh/context isolation | TR-QB-DATA-001 | 025-027 | P2 |
-| FR-QB-010 | qbrain.ai settings | TR-QB-SETTINGS-001 | 028-030 | P2 |
-| FR-QB-011 | Aspect-dependent TUI | TR-QB-LAYOUT-001 | 031-033 | P3 |
-| FR-QB-012 | Three-state visibility | TR-QB-VISIBILITY-001 | 034-036 | P3 |
-| FR-QB-013 | Column/line sizing | TR-QB-SIZE-001 | 037-039 | P3 |
-| FR-QB-014 | Expand/shrink keys | TR-QB-RESIZE-001 | 040-042 | P3 |
-| FR-QB-015 | Custom bindings | TR-QB-KEYS-001 | 043-045 | P3 |
-| FR-QB-016 | Relaunch persistence | TR-QB-PERSIST-001 | 046-048 | P3 |
-| FR-QB-017 | Desktop sidebar | TR-QB-DESKTOP-001 | 049-051 | P4 |
-| FR-QB-018 | Branding/documentation | TR-QB-BRANDING-001 | 052-054 | P5 |
-| FR-QB-019 | Governed distribution | TR-QB-DISTRIBUTION-001 | 055-057 | P5 |
-| FR-QB-020 | Compact tool headers | TR-QB-PRESENTATION-001 | 058-059; 060 | P2; 060 closes P5 |
+The operator explicitly directed keeping generated exports local. `docs/Project/wiki/` and `docs/requirements/` are excluded through local Git `info/exclude`; project source, authored documentation and this handoff are committed. The generated files remain intact, including MCP-service-owned read-only manifests/documents. No ownership or permission change was made.
 
-**AC-QB-060 / TEST-QB-060 is staged**: TUI/CLI red-first rendering tests in P3, desktop in P4, VS Code/packaged tests in P5. Do not mark it satisfied until every host passes in P5. AC-QB-059 payload/approval preservation remains a host regression obligation throughout.
+Other McpServer worktrees belong to other efforts and remain outside this task. Preserve the retained McpServer rebase stash `fb941200e66392b9926bf267d4791777b3831b29`. Never reset or clean unrelated work. Git commits and this consolidation preserve source histories; they do not close implementation acceptance gaps or authorize deployment.
+## What has actually been achieved
 
-Phase-owned counts: **P1 18, P2 14, P3 18, P4 3, P5 7 = 60/60**. Staged/regression coverage does not double-count ownership.
+### P0 and requirement reconciliation
 
-UC aliases:
+P0's final acceptance is recorded in [task-progress.json](/home/sharpninja/github/cline/docs/receipts/p0/remediation-r2/task-progress.json): HV10 technical AGREE at 99 accuracy/99 completeness, full audit recovery/readback and canonical completion. Review directory: `/home/sharpninja/github/cline/docs/receipts/hv/20261010T225840Z-p0-r10`; reviewer session `9a3822e9-5d7c-49d8-924d-603f8621dd05`. P0 PR [#1](https://github.com/sharpninja/cline/pull/1) was merged October 11 at 00:52:00Z, merge commit `be3ce90fa2d7013c0a383e44e6275f5ab492c53d`. This handoff relies on the saved acceptance/merge evidence and current canonical P0 flag, not a new remote PR query.
 
-| UC | Scenario | Owner |
-| --- | --- | --- |
-| UC-QB-001 | Start trusted governed agent | P1 |
-| UC-QB-002 | Recover enforcement infrastructure failure | P1 |
-| UC-QB-003 | Execute/complete audited work | P1 |
-| UC-QB-004 | Resume, delegate, execute remotely | P1 |
-| UC-QB-005 | Work without Cline Cloud | P1 |
-| UC-QB-006 | Inspect linked Session Log | P2; views P3/P4 |
-| UC-QB-007 | Browse workspace TODOs | P2; views P3/P4 |
-| UC-QB-008 | Configure qbrain.ai | P2; desktop P4 |
-| UC-QB-009 | Reposition/hide TUI panel | P3 |
-| UC-QB-010 | Customize size/keys and relaunch | P3 |
-| UC-QB-011 | Inspect desktop data | P4 |
-| UC-QB-012 | Install/launch governed artifacts | P5 |
-| UC-QB-013 | Inspect compact tool invocation | P2-P5; final P5 |
+The remaining-phase AC gap analysis was completed before subsequent coding. Later holistic reconciliation expanded the inventory to 20 FR, 20 TR, 76 TEST/AC records, 96 mappings, 228 criterion copies and 13 UCs. [Resolution verification](/home/sharpninja/github/cline/docs/receipts/holistic-review-20261013/resolution/verification.json) records 1,911 checks, phase allocation, and preservation of P0 acceptance. New product criteria stayed pending. These are requirement-alignment results, not proof their product behavior is implemented.
 
-## 5. Execution order and HV boundaries
+### P1 A8 binding and durable store
 
-**P0 — after explicit development approval:** recheck the live requirement namespace; create or reconcile FR/TR/structured AC/TEST/UC records and mappings through MCP; preserve assigned IDs; freeze compatibility, recovery, migration, and settings contracts. Do not mutate generated storage documents directly. Administrative P0 has no HV.
+In the support worktree, `plugins/core/lib-ps/governed-turn-binding.ps1` and `governed-turn-store.ps1` exist. The store handles multiple delivered open turns, captured bindings, pending-to-minted aliases, durable consumer acknowledgments and restart lookup with a context-scoped interprocess lock.
 
-1. **P1:** required plugin/trust/audit/completion, all runtime factories/delegates, no Cline Cloud. Green suites -> **HV-P1**.
-2. **P2:** shared read service/refresh/secrets/settings, deterministic summaries and immutable payload contracts. Green cumulative suites -> **HV-P2**.
-3. **P3:** responsive TUI, hidden cycle, sizing/custom keys/persistence, staged TUI headers. Green cumulative/real-terminal suites -> **HV-P3**.
-4. **P4:** desktop sidebar/client/sidecar/settings/chat preservation and staged desktop headers. Green cumulative/UI suites -> **HV-P4**.
-5. **P5:** branding/artifacts/updates/docs, VS Code headers, full 60-AC packaged acceptance. Green full suites -> **HV-P5**.
+The [latest A8 store proof](/home/sharpninja/github/cline/docs/receipts/p1/a8-lifecycle-20261014T195738/verified-20261014T201951/proof.json) records matching mock/production test and worker hashes: 72 cases, 920 checks, 848 expected negative-control rejections, 0 failed and 0 skipped. This includes 63 lifecycle and 9 storage cases. Real cases cover process termination around alias publication, concurrent distinct/duplicate ingress, corruption, wrong context, lock contention and existing/dangling symlinks. Earlier 71-case mock evidence preceded implementation; the first production failure and fix remain retained.
 
-For each AC: write its executable test **before implementation**, retain genuine missing-behavior red evidence, implement, run green and regressions, and retain command/test/source revision or changed-state fingerprint/result/AC linkage. Setup failures do not count as red TDD. Cover linked UC basic/alternative flows. No skipped required tests, invented results, or unrun checks claimed complete.
+Binding regression records 41 cases, 351 checks, 310 negative controls, 0 failed and 0 skipped. These prove bounded local primitives. The proof explicitly has `liveIntegrationVerified:false` and `phaseAccepted:false`. S6, full migration, transport integration and a real governed application task are not established by these counts.
 
-**HV runs only at major development-phase completion for code/documentation changes.** Not after each edit, red/green step, AC, subtask, administrative action, or merely to update a record after an accepted gate. This handoff creation does not close a development phase and does not trigger HV.
+### Support rebase and Linux regression
 
-Each phase-closing HV requires request/response JSONL receipts, full verdict in the MCP session log, all FAIL/UNKNOWN findings, accuracy and completeness >=98%, and **AGREE** before phase closure. Remediate findings and rerun that same closing gate as needed. Report aborted/unrun reviews honestly.
+The [rebase proof](/home/sharpninja/github/cline/docs/receipts/p1/linux-runtime-20261014T184544/rebase-verified-20261014T195312/proof.json) records the support branch's October 14 rebase to c4fff186 and retention of its original changes/stash. An automatic merge duplicated a traversal SafeHandle acquisition; restoring the exact original source and forcing a fresh build resolved two descriptor-lifetime failures. The affected Linux scope passed 117/117: 78 build tests and 39 server tests, 0 failures/skips. This is a focused scope, not a fresh full McpServer or P1 gate.
 
-## 6. Implementation anchors and verified tooling
+### Build/CI callers and storage isolation
 
-Reinspect the current source before editing; the plan records earlier observations, not a guarantee that line numbers or APIs are unchanged.
+The [CI wrapper proof](/home/sharpninja/github/cline/docs/receipts/p1/ci-wrappers-20261014T144220/increment-proof.json) records 20 reconciled CI command bodies, 649 contract checks, 434 rejecting controls and 0 contract failures/skips. Full VS Code Vitest reported 1,440/1,440 tests across 109 files. Bun unit reported 1,210 passed/0 failed across 90 files, but its aggregator did not report skips: **do not infer zero skips**. Three compiler checks passed without graph-observed source changes. The upstream package-script manifest was unchanged at that checkpoint.
 
-- Runtime: `/home/sharpninja/github/cline/sdk/packages/core/src/services/local-runtime-bootstrap.ts`, `/home/sharpninja/github/cline/sdk/packages/core/src/services/global-settings.ts`, `/home/sharpninja/github/cline/sdk/packages/core/src/runtime/orchestration/runtime-builder.ts`, `/home/sharpninja/github/cline/sdk/packages/agents/src/agent-runtime.ts`.
-- Proposed isolated integration directory: `/home/sharpninja/github/cline/sdk/packages/core/src/extensions/qbrain/` (not implemented).
-- CLI cloud/control: `/home/sharpninja/github/cline/apps/cli/src/utils/enterprise.ts`, `/home/sharpninja/github/cline/apps/cli/src/utils/feature-flags.ts`, `/home/sharpninja/github/cline/apps/cli/src/utils/telemetry.ts`.
-- TUI: `/home/sharpninja/github/cline/apps/cli/src/tui/root.tsx`, `/home/sharpninja/github/cline/apps/cli/src/tui/components/chat-entry.tsx`, `/home/sharpninja/github/cline/apps/cli/src/tui/hooks/use-root-keyboard.ts`, `/home/sharpninja/github/cline/apps/cli/src/tui/components/dialogs/command-palette-items.ts`.
-- Tool display: `/home/sharpninja/github/cline/apps/cli/src/utils/helpers.ts` and `/home/sharpninja/github/cline/apps/cli/src/utils/events.ts`. Earlier inspection found the TUI reconstructing full commands from `rawInput`, bypassing shortened summaries.
-- Desktop: `/home/sharpninja/github/cline/apps/examples/desktop-app/webview/components/agent-sidebar.tsx`, `/home/sharpninja/github/cline/apps/examples/desktop-app/webview/app/page.tsx`, `/home/sharpninja/github/cline/apps/examples/desktop-app/webview/lib/desktop-client.ts`, `/home/sharpninja/github/cline/apps/examples/desktop-app/sidecar/commands.ts`.
-- Desktop settings/cloud/header renderers: inspect `/home/sharpninja/github/cline/apps/examples/desktop-app/webview/components/views/settings/`, `/home/sharpninja/github/cline/apps/examples/desktop-app/sidecar/cloud-sessions.ts`, and `/home/sharpninja/github/cline/apps/examples/desktop-app/webview/components/views/chat/messages/`.
-- VS Code adapter and webview: `/home/sharpninja/github/cline/apps/vscode/src/sdk/` and `/home/sharpninja/github/cline/apps/vscode/webview-ui/`.
+The [native webview verification](/home/sharpninja/github/cline/docs/receipts/p1/ci-reconciliation-20261014T131045/webview-verification.json) records Linux VS Code 1.139.1 seed/verify/restart isolation: derivative and synthetic Cline data used separate origins/state, persisted across restart, and the synthetic upstream state stayed unchanged. Five input artifacts were unchanged. This is not all-host storage acceptance.
 
-Tooling: **Bun for package management/task running; Node for the application runtime/ABI**. No npm/yarn/pnpm/npx. Build SDK dependencies with `bun run build:sdk` before downstream execution/tests after SDK changes; compiled exports and running processes do not hot-reload source. Follow actual imports and package runners, not a blanket assumption that all suites use `bun:test`.
+Earlier P1 work includes SDK tool/final-completion gates, private governance integration, signed workspace verification policy, server tool-execution validation, event/receipt identity checks, plugin artifacts and bundle groundwork. Their dated receipts remain under `docs/receipts/p1`. They must be checked against current sources and accumulated changes before reuse as phase evidence. In particular, no signed/pinned final bundle, full host integration or complete no-egress proof is inferred from a successful lower-level test.
 
-Verified at handoff creation, but **not executed as implementation validation**:
+## Exact unfinished increment and next implementation sequence
 
-```text
-bun run build:sdk
-bun -F @cline/agents test
-bun -F @cline/core test:unit
-bun -F @cline/cli typecheck
-bun -F @cline/cli test:unit
-bun -F @cline/cli test:e2e:tuistory
-```
+The interrupted increment is the PowerShell governed audit outbox:
 
-Current core/agents/CLI test scripts invoke **Vitest**. Desktop also uses Vitest, with scripts `typecheck`, `test:sidecar`, `test:settings-ui`, `test:desktop-client`, and `test:chat-ui`; run them from `/home/sharpninja/github/cline/apps/examples/desktop-app`. Reinspect VS Code scripts/host test requirements and every runner's discovery filters before adding tests. Tests outside discovery do not count.
+- Contract: `/home/sharpninja/github/cline/.worktrees/mcpserver-qbrain/plugins/core/contracts/governed-audit-outbox.md`.
+- Fixture draft: `/home/sharpninja/github/cline/.worktrees/mcpserver-qbrain/plugins/core/test-fixtures/GovernedAuditOutbox.Contract.ps1`.
+- Saved context: `/home/sharpninja/github/cline/docs/receipts/p1/a8-outbox-20261014T202425`.
+- Related audit identity: session `Codex-20261009T200426Z-plugin-session`, request `req-20261015T012425Z-a8-outbox`. Its old pointer is not proof of a live process.
 
-Use existing typed file-backed state/secret services and proxy-aware backend networking. Avoid ad hoc provider-string branches, guessed SDK APIs, generated-file edits, per-PR changelog entries, or direct session/requirement/TODO store mutations. Preserve necessary data/protocol IDs. Respect package instructions and ignore rules.
+The contract maps FR-QB-003/005, TR-QB-AUDIT-001, AC/TEST-QB-008/009/069. It specifies captured context, durable independent event identity/order, exact captured payload preservation, journal-before-alias application, context/receipt matching, bounded retry classification, retained terminal rejection/quarantine evidence, and no authority for the outbox to complete a turn. Read the full contract, verify consistency with current canonical requirements, and preserve its testable limits: process termination/restart evidence is not machine power-loss durability.
 
-## 7. Working tree, limitations, and next action
+**No passing mock gate, production PowerShell outbox implementation, or Nuke outbox target has been established.** Only the contract and fixture draft were found; the source directory contains binding/store scripts, not an outbox implementation. An October 21 static check of the draft confirms parser errors 0 and analyzer warnings 4:
 
-Before creating this handoff, tracked/staged diffs were empty. These **pre-existing untracked artifacts** were present; do not delete, stage, or overwrite them blindly:
+1. Automatic variable `$Event` is assigned at lines 72 and 88. Rename the fixture variable without changing semantics.
+2. A non-ASCII fixture character lacks a BOM. Preserve the intended Unicode case with a justified representation compatible with the actual target runtime.
+3. `Get-FixtureFiles` at line 113 violates the singular-noun rule.
 
-```text
-/home/sharpninja/github/cline/.mcpServer/
-/home/sharpninja/github/cline/AGENTS-README-FIRST.yaml
-/home/sharpninja/github/cline/docs/receipts/
-/home/sharpninja/github/cline/docs/todo.yaml
-/home/sharpninja/github/cline/docs/wiki.yaml
-```
+Fix these fixture issues and independently verify the assertions before executing them. Current fixture parameters are `-Mode Mock|Production -ReceiptPath <task-owned-path>`, and it supports `-WhatIf`. Do not execute Production mode before a documented green mock gate and implementation. Temporary design scratch text previously said `create.lock`; the current contract and existing store use `.lock`. Resolve against source, not scratch notes.
 
-This task adds only `/home/sharpninja/github/cline/HANDOFF.md` to product documentation. No commit, push, product build, product tests, separate requirement creation, or implementation-phase review is implied.
+When implementation resumes, the order is:
 
-The guarantee is **application-level governance** in shipped cline-qb paths. It cannot prevent a machine administrator replacing binaries/running another product or mathematically guarantee arbitrary LLM prose compliance. Missing required infrastructure intentionally blocks work and requires supported recovery.
+1. Reload profile and live memories, excluding 007; read the complete current plan and effective requirements through the plugin. Reconcile old proposed Node/Python tooling replacements against the October 21 exception. This exception is not permission to silently revise plan acceptance criteria or broaden product scope.
+2. Inspect current branch revisions and any new dirty changes before continuing implementation. Keep unrelated work intact. Use current source and contracts to decide whether old outbox assumptions remain valid after the first-party-tooling clarification.
+3. Finish the outbox test contract and green mock/negative-control gate; then bind the same assertions to the approved implementation. Preserve original failed evidence and chronological hashes. Cover alias recovery, retained blockers, receipt identities and retries rather than just event counts.
+4. Complete A3/A5/A8 legacy migration, transport integration, alias acknowledgments, durable event replay and explicit decision triples. Do not infer steering relationships from similar text; captured native/root IDs must trace each request to its session and actual host lifecycle.
+5. Deliver S6 `mintTurn`, `recordReview` and lossless normalization support via the supported plugin/REPL boundary. The coordinating Claude agent will not deliver it. Keep Codex's ownership and Claude's independent review role distinct.
+6. Produce and verify the required Linux runtime/module/REPL/plugin artifacts and signed policies. Wire actual shipped host startup before any storage-bearing import/daemon startup. Rebuild SDK `dist` when changing SDK sources, then restart consuming processes.
+7. Demonstrate an actual governed Linux startup, task and exact audited request/result with provider credentials handled privately. Verify storage isolation, trust failures, policy/tool/completion enforcement and no Cline Cloud behavior. A mocked task or `--version` is not this milestone.
+8. Finish the full P1 requirement/host/runner matrix and cumulative validation, with explicit failure/skip accounting and upstream-edit necessity review. Respect the operator's Linux-first deferment; do not silently mark deferred platforms passed. Resolve how later platform evidence satisfies the final gate before claiming full acceptance.
+9. Perform the complete introspective/holistic self-review, freeze inputs, then request actual Claude phase HV through its required plugin. Persist request JSONL, full response stream, full verdict and server readback. Source-verify findings and sweep for sibling defects before the next round.
+10. Only after all phase gates and canonical readback agree, create phase/support PRs. Attach them to the chat. Wait for their merges before P2. No P1 PR or phase acceptance is claimed here.
 
-**Next action:** retrieve and read all of `QB-AGENT-001`, confirm its current state and operator development authorization, then execute P0 and tests-first P1. Do not start with sidebar implementation before the required policy/service foundations. Do not mark the planning TODO complete merely because it was saved or handed off.
+## Open risks and unresolved evidence
+
+- Full governed positive startup/task evidence is still missing in the latest canonical checkpoint. Historical compiled-startup tests failed with "Hub governance identity is not initialized by trusted host bootstrap." Do not weaken trusted identity requirements to make them pass. Later component successes do not close this gap.
+- Historical full-suite failures and platform gaps need current disposition, not deletion from status. Some old failing tests were subsequently repaired; use the current evidence chain before calling them still failing or resolved.
+- A prior operator-cache fixture incident had `originalRestored:false` and original data unknown. This handoff found no new restoration/disposition evidence. Retain it as unresolved for phase exit unless a fresh authoritative receipt proves otherwise.
+- Three superseded BUG-TRIAGE-139 evidence tests had explicit operator-approved retirement. That approval was exact and bounded; it does not allow retiring arbitrary upstream tests. Existing immutable-receipt checks and current-index checks remain.
+- PowerShell named-pipe errors were observed inside the sandbox and absent outside it. That comparison establishes a sandbox effect, not which restriction caused it. The requested network-only controlled comparison is not declared resolved here. Neither old probe established compiler/NuGet behavior. Keep the diagnostic report local and distinguish it from product bootstrap failures.
+- The October 15 LEGION2 reboot request has failure receipts and an interrupted later attempt, but no verified reboot completion in the inspected directories. Do not claim the machine rebooted, and do not trigger another reboot solely from this handoff. The relevant folders are `docs/receipts/operations/legion2-reboot-20261015T124143` and `docs/receipts/p1/legion2-reboot-20261015T124304`.
+- Host process inventory was limited to this tool's process namespace. It cannot prove that no reviewer or build runs elsewhere. Inspect actual handles/receipts before dispatching a duplicate review. No reviewer was launched during handoff preparation.
+- Historical exact-text recovery covered 128 operator messages and 268 final responses (396 records) with explicit retrospective/native identities. Do not describe recovery as proof the original turns were logged on time, and do not revert approved dash normalization.
+
+## Profile, memories, tools and operational receipts
+
+Use [add-profile](/home/sharpninja/.codex/skills/add-profile/SKILL.md) on resume/compaction. The October 21 update requires full profile reads plus live Global and active Workspace memory reads every invocation, with pagination/full text checks and 007 filtered before display. A cached merged profile is not a substitute for live memories. The skill reports counts and explains how they affect the current task.
+
+This handoff reload read the single `/home/sharpninja/.claude/profile/PROFILE-MERGED.md`, three Global memories and one Workspace memory. Included IDs are Global `MEMORY-INFRA-001`, `MEMORY-PROCEDURE-001`, `MEMORY-PROCESS-009`; Workspace `MEMORY-TOOLING-001`. 007 was excluded. The full filtered readbacks are preserved locally beside this handoff's receipts. A helper's single-item `.Count` reporting overstated the Workspace excluded count; the loaded Workspace IDs contain exactly the one tooling memory, and 007 content was not loaded. Do not reuse that incidental excluded-count display as a server record count.
+
+The Global lab memories document working SSH and source sharing. LAB-OMARCHY source is under `/home/sharpninja/github`; LEGION2 source is under `F:\github`, reachable from Linux at `/mnt/legion2-github`. Use the documented SSH alias `PAYTON-LEGION2`/`LEGION2` when the task needs it. Credentials/key material remain private. Do not print or copy credential contents into this handoff, receipts or chat.
+
+Active Codex plugin manifest: **1.121.0**, root `/home/sharpninja/.codex/plugins/cache/mcpserver-codex-plugin/mcpserver/1.121.0`. Trust verification on October 21 at 12:13:57 local succeeded for marker signature and nonce after the restricted sandbox denied network access. Do not treat `-Command Status` alone as fresh health verification; it primarily reports cached state in this installed version. Use the plugin bootstrap for trust and its wrapper for all canonical mutations/reads, not raw REST.
+
+Reusable temporary helpers, inspect before using:
+
+- `/tmp/qb-profile-memory-session.ps1 -Mode Library` defines `Invoke-ProfileWorkflow` using the installed plugin and explicit Cline workspace. Dot-sourcing its parameters can shadow caller variables; save caller parameters under distinct names first.
+- `/tmp/qb-check-audit-script.ps1 -Path <script.ps1>` runs PowerShell parser and PSScriptAnalyzer Warning/Error checks. A returned exception is a failure, even when parser count alone is zero.
+- `/tmp/qb-read-local.ps1` and `/tmp/qb-search-code.ps1` support bounded file reads/searches. Prefer `rg` for discovery. Avoid output truncation when claiming a complete read.
+- `/tmp/qb-handoff-audit.ps1` owns this handoff's audit cache and exact-result readback. Its durable pointer is [turn.json](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/turn.json).
+
+The main conversation session is `Codex-20261009T200426Z-plugin-session`. The original handoff replacement request was `req-20261021T171556Z-replace-handoff`; current develop integration has its own request pointer in `docs/receipts/develop-integration-20261021/turn.json`. The server requires `req-yyyyMMddTHHmmssZ-slug` even though the operator prefers local display/file timestamps. A local-format handoff request was rejected before persistence; its failsafe remains. The successful retry uses the server's required UTC ID while this document and chat use measured local time. Do not relabel a local time with Z.
+
+Audit caveats: the earlier plan-viewer turn `req-20261021T170412Z-open-current-plan` was interrupted while closing; a helper parameter-shadowing defect prevented completion before the later request. Its actions and prepared result must not be represented as proof that an exact final was delivered in chat. This handoff carries the actual plan result. Do not claim all historical session logging is clean merely because this handoff's request/result readback passes. The old runtime cache under `.mcpServer/qb-task-runtime-20261013/mcp-cache` retains earlier interrupted state and should not be reset blindly.
+
+The tooling-memory creation was independently read back with exact text/scope/ID and exact request/result audit: [verification](/home/sharpninja/github/cline/docs/receipts/handoff-20261021/tooling-memory-verification.json). The add-profile skill edit has an original retained at `/home/sharpninja/.codex/skills-backups/add-profile/20261021T113436/SKILL.md`. No memory mutation occurs merely from a reload.
+
+## What to verify before any next completion claim
+
+Read the canonical TODO again, current effective requirement records and the relevant complete receipt bodies. Confirm scope, source hashes, native runtime identity, failure/skip counts, and reviewer/audit provenance. Confirm every governing requirement has adequate ACs and every claimed result has its named evidence. Keep original operator decisions, upstream working behavior and established idempotency/outbox patterns as comparison anchors. No new mechanism should be introduced just to silence one review finding.
+
+This handoff has one current state and one ordered continuation path. Historical receipts remain evidence only. The previous active handoff text has been replaced, not appended or left as a competing active handoff. Product acceptance and all pending phase gates remain unchanged.

@@ -2,21 +2,21 @@
 
 This guide covers everything you need to build and run the Cline CLI locally after cloning the repository. It includes setup instructions, a tech stack overview, and a walkthrough of the TUI architecture.
 
-For CLI command reference and usage, see [DOC.md](./DOC.md) and [README.md](./README.md).
+For CLI command reference and usage, see [README.md](./README.md) and the [CLI reference](../../docs/cli/cli-reference.mdx).
 
 ## Prerequisites
 
 Install these before starting:
 
-1. [Bun](https://bun.sh) (v1.0.0+) - Package manager, runtime, and bundler
-2. [Zig](https://ziglang.org/download/) - Required by OpenTUI's native core. The `@opentui/core` package includes a Zig-compiled native binary that builds from source on install. Without Zig, `bun install` will fail for OpenTUI packages.
-3. Node.js 22+ - Required for some build tooling and test infrastructure
+1. [Bun](https://bun.sh) 1.4.2 - The version pinned by the root `package.json`
+2. Node.js 22+ - Required for build tooling and test infrastructure
+
+OpenTUI uses native platform packages. If you need to build its native core from source, follow that package's build instructions for the required Zig toolchain.
 
 Verify your setup:
 
 ```bash
-bun --version    # should be >= 1.0.0
-zig version      # any recent stable release
+bun --version    # should be 1.4.2
 node --version   # should be >= 22
 ```
 
@@ -25,7 +25,7 @@ node --version   # should be >= 22
 From the repository root:
 
 ```bash
-# Install all workspace dependencies (including native OpenTUI build)
+# Install all workspace dependencies
 bun install
 
 # Build the SDK packages and CLI
@@ -54,7 +54,7 @@ cd apps/cli
 bun link
 ```
 
-The `build:sdk` step is required because `bun link` runs without the `--conditions=development` flag, so Bun resolves workspace packages (`@cline/llms`, `@cline/core`, etc.) via their `package.json` exports which point to `dist/`. Without the build, those dist files don't exist and you'll get "Cannot find module" errors.
+The `build:sdk` step is required because workspace packages (`@cline/llms`, `@cline/core`, etc.) export compiled files from `dist/`. This also applies when `--conditions=development` is set. Without the build, those files don't exist and you'll get "Cannot find module" errors.
 
 After linking, you can run `cline` from any directory:
 
@@ -64,35 +64,40 @@ cline "prompt"     # single-prompt mode
 cline auth         # authenticate a provider
 ```
 
-If you prefer to skip the build step, use `bun run dev` from `apps/cli/` instead -- it passes `--conditions=development` which resolves packages directly from source.
+After building the SDK, `bun run dev` from `apps/cli/` runs the CLI's TypeScript entry point. SDK dependencies still load from `dist/`.
 
 ### Rebuilding After SDK Changes
 
-If you modify any package in `packages/` (shared, llms, agents, core, etc.), rebuild the SDK:
+If you modify any package in `sdk/packages/` (shared, llms, agents, core, etc.), rebuild the SDK from the repository root:
 
 ```bash
 bun run build:sdk
 ```
 
-If you're using `bun run dev`, you don't need to rebuild after every SDK change -- dev mode resolves packages from source. But if you're using the linked `cline` binary, you do need to rebuild for changes to take effect.
+Restart the CLI and its running hub after rebuilding. Running processes do not reload SDK modules automatically. The CLI discovers or starts the hub itself; you do not need to launch a separate hub before starting the CLI.
+
+An agent turn also needs provider credentials. Use `cline auth` or the provider's supported environment variables; see [README.md](./README.md).
 
 ## Monorepo Structure
 
 ```
-cline-sdk/
-  packages/           # SDK packages (published to npm)
+cline/
+  sdk/packages/       # SDK packages
     shared/           # Contracts, schemas, path helpers, runtime utilities
     llms/             # Provider settings, model catalogs, AI SDK handlers
     agents/           # Stateless agent loop, tool orchestration, hooks
-    scheduler/        # Scheduled execution, concurrency control
     core/             # Stateful orchestration, sessions, hub, storage, config
-    enterprise/       # Internal enterprise integrations (not published)
+    sdk/              # Public @cline/sdk entry point
+    ui/               # Shared browser UI components
+  sdk/examples/       # Plugin, hook, and automation examples
   apps/
     cli/              # This package - CLI host and TUI
-    code/             # Tauri + Next.js desktop app
+    cline-hub/        # Hub dashboard
     vscode/           # VS Code extension
-    desktop/          # Desktop application
-    examples/         # Sample integrations
+    examples/
+      desktop-app/    # Tauri + Next.js desktop app
+      vscode/         # SDK-based VS Code example
+      ...             # Other sample integrations
   biome.json          # Linter and formatter config (Biome)
 ```
 
@@ -328,6 +333,8 @@ Layout follows flexbox conventions: `flexDirection`, `flexGrow`, `flexShrink`, `
 
 ## Testing
 
+Run these commands from `apps/cli/` after building the SDK from the repository root:
+
 ```bash
 # Unit tests
 bun run test:unit
@@ -362,7 +369,7 @@ bun run dev
 Use a temporary config directory to simulate a fresh install:
 
 ```bash
-bun run dev -- --interactive --config /tmp/cline-test
+bun run dev --interactive --config /tmp/cline-test
 ```
 
 Or set `CLINE_FORCE_ONBOARDING=1` to force the onboarding view regardless of existing config.
@@ -447,17 +454,17 @@ Then attach VS Code or Chrome DevTools to `ws://127.0.0.1:6499`.
 
 ## Publishing
 
-The CLI is published as the `cline` wrapper package on npm with platform-specific binaries under `@cline/cli-*`. The release flow lives in the `publish-cli` skill (`.cline/skills/publish-cli/SKILL.md` at the repo root).
+The CLI is published as the `cline` wrapper package on npm with platform-specific binaries under `@cline/cli-*`. Follow the [publish-cli skill](../../.agents/skills/publish-cli/SKILL.md) for release preparation and publication from the repository root.
 
 From the `apps/cli` workspace:
 
 ```bash
-# Dry run for checking package size and build output
-bun publish --dry-run
-
-# Publish to npm (version bump required first)
-bun run release
+# Build generated platform packages, then preview their publication
+bun run build:platforms
+bun run publish:npm:dry
 ```
+
+Direct `bun publish` from `apps/cli` is guarded because this source package's binary points at TypeScript source. The publish scripts use generated packages instead.
 
 See [DISTRIBUTION.md](./DISTRIBUTION.md) for details on how the CLI is packaged.
 

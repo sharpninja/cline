@@ -27,12 +27,14 @@ This repo is a WIP framework for building and orchestrating AI agents. Full refa
 
 ### Essential Commands
 
+Run these commands from the monorepo root (the parent of `sdk/`) with Bun 1.4.2 and Node.js 22 or newer.
+
 | Command | Purpose |
 |---------|---------|
 | `bun install` | Install dependencies |
 | `bun run build` | Build SDK and CLI |
 | `bun run build:sdk` | Build SDK packages only |
-| `bun run dev` | Build in development mode |
+| `bun run dev` | Build the SDK and start the CLI in development mode |
 | `bun run cli` | Run CLI interactively |
 | `bun run test` | Run the Vitest suite |
 | `bun run types` | Typecheck all packages |
@@ -47,7 +49,7 @@ bun -F @cline/agents build|test|typecheck
 
 ### Rebuilding
 
-Changes to published SDK packages require `bun run build:sdk`. Direct CLI runs pick up rebuilt packages immediately. Use `dev:*` scripts for automatic rebuilding during development.
+Changes to SDK packages require `bun run build:sdk`, including when running the CLI with `--conditions=development`: package exports point to compiled `dist/` files. Restart the CLI and its running hub after rebuilding so they load the new code. Root `bun run dev` builds once before launching; it does not watch SDK source.
 
 The CLI build (`bun -F @cline/cli build`) bundles packages from their compiled `dist/`, not their TypeScript source. If you edit a package and then build the CLI without rebuilding the package first, the CLI binary will silently include the old package code. Always run `bun run build:sdk` (or the relevant `bun -F @cline/<pkg> build`) before building the CLI when testing changes end-to-end.
 
