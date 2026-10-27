@@ -506,6 +506,7 @@ export async function prepareLocalRuntimeBootstrap(
 	// state file should serve the same tools.
 	const composioToolsExtension = await createComposioToolsExtension({
 		logger: localConfig?.logger,
+		providerSettingsManager,
 	});
 	const builtInExtensionList = [
 		...(fileHookExtension ? [fileHookExtension] : []),

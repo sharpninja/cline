@@ -35,3 +35,22 @@ export function requireDirectProvider(providerId: string | undefined): string {
 	assertDirectProvider(selected);
 	return selected;
 }
+
+/**
+ * Private composition for an existing host-owned settings manager.
+ * Blocks cloud getProviderSettings calls before reaching the underlying getter.
+ * Other operations are unchanged; this does not isolate constructor or raw storage reads.
+ */
+export function withoutClineAccountSettings<
+  T extends { getProviderSettings(providerId: string): unknown },
+>(manager: T): T {
+  const getProviderSettings = (providerId: string) =>
+    isClineCloudProvider(providerId) ? undefined : manager.getProviderSettings(providerId);
+  return new Proxy(manager, {
+    get(target, property, receiver) {
+      return property === "getProviderSettings"
+        ? getProviderSettings : Reflect.get(target, property, receiver);
+    },
+  });
+}
+

@@ -183,6 +183,11 @@ export async function preparePluginInstallation(options: {
 					)
 						throw failure();
 					const directory = entry.type === "Directory";
+					portablePath(
+						directory
+							? entry.header.path.replace(/\/$/, "")
+							: entry.header.path,
+					);
 					const fullPath = portablePath(
 						directory ? entry.path.replace(/\/$/, "") : entry.path,
 					);

@@ -1058,6 +1058,22 @@ error reaches its user-run count and is not a previously displayed error ID.
 
 ### Composio beta access
 
+The generic connector factory accepts the already selected
+`providerSettingsManager` from local bootstrap. Account checks and account-flag
+evaluation use that manager. Connector OAuth resolution for an injected manager
+uses the existing `RuntimeOAuthTokenManager` with that same manager; instances
+are retained by manager identity so concurrent tools share its refresh state.
+Calls without an injected manager retain the generic default OAuth manager.
+
+The private `@cline/qbrain-governance/cloud-policy` entrypoint supplies
+`withoutClineAccountSettings(manager)`. Its manager view rejects cloud
+`getProviderSettings` lookups before calling the underlying getter and preserves
+direct-provider lookups. Generic core does not import this policy. This view does
+not isolate the concrete manager constructor, raw `read()`, or last-used-provider
+operations. Hosts must separately supply isolated storage and compose the view
+through their existing manager injection; a focused factory test does not prove
+that a running host has installed that composition.
+
 Composio management in the desktop sidecar and tool registration/execution in
 local runtimes (including the detached hub) require the account-scoped PostHog
 flag `CLINE_COMPOSIO_BETA` to be exactly `true`. The shared core account flag

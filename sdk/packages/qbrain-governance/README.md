@@ -22,3 +22,19 @@ Parsing uses the already-locked `tar` 7.5.22 library. Accepted input is a tar or
 The returned immutable preparation owns the exact expected file bytes and hashes. `install(parentDirectory)` requires an existing absolute host-owned private product directory with no symlink ancestors; the host must resolve it through QBrain storage policy. Each install gets a fresh private directory and returns its root and entrypoint only after verifying the entire tree. A failed write removes only its own directory where possible. Crashes may leave inert incomplete directories; these are never selected or reused. Parallel installs have different directories. Product lifecycle cleanup of retired installations remains a host responsibility.
 
 `verify(rootDirectory)` checks every expected file's bytes and detects missing files, unexpected entries, links and changed assets, including non-code assets. Reconstruct the preparation from pinned archive bytes after restart, and verify immediately before loading. A mutable receipt on disk never supplies the expected inventory. Privileged or same-account replacement after verification is outside this filesystem check's guarantees; hosts must not expose the installation directory to model writes. Native Windows/macOS behavior, final V2 bundle/dependency closure and mandatory product factory integration remain acceptance work. This primitive alone does not certify a running governed host.
+
+## Private account settings composition
+
+`withoutClineAccountSettings(manager)` returns a view with the same manager type.
+Cloud aliases are blocked at `getProviderSettings` before its underlying getter;
+direct-provider lookups and other operations retain their existing behavior.
+Use it with the existing host-owned manager dependency, after resolving isolated
+product storage. Generic core keeps its original account flags and connector
+behavior and receives no product-policy import.
+
+This method-level boundary does not protect construction, raw storage reads or
+last-used-provider APIs. It does not establish signed bootstrap, audit completion,
+host adoption or accepted S/P artifact integration. Those remain independent P1
+gates. The compatibility tests retain the original generic assertions, while the
+private exclusion tests supply this view through the same manager dependency.
+
