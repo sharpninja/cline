@@ -387,50 +387,109 @@ describe("runDoctorCommand", () => {
 		});
 	});
 
+	async function assertStaleSidecarFix(reply: string): Promise<void> {
+		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		Object.defineProperty(process, "platform", { value: "linux" });
+		try {
+			const cwd = "/workspace";
+			mockReadHubDiscovery.mockResolvedValue(undefined);
+			mockProbeHubServer.mockResolvedValue(undefined);
+			mockSpawnSync.mockImplementation((command: string, args?: string[]) => {
+				if (
+					command === "pgrep" &&
+					Array.isArray(args) &&
+					args[0] === "-fal" &&
+					args[1] === "--" &&
+					args[2] === "/src-tauri/bin/code-sidecar"
+				) {
+					return {
+						status: 0,
+						stdout: reply,
+					};
+				}
+				return { status: 1, stdout: "" };
+			});
+			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+			const output: string[] = [];
+			const code = await runDoctorCommand(
+				{ cwd, json: true, fix: true },
+				{
+					writeln: (text) => {
+						output.push(text ?? "");
+					},
+					writeErr: () => {},
+				},
+			);
+
+			expect(code).toBe(0);
+			expect(killSpy).toHaveBeenCalledWith(60123, "SIGKILL");
+			expect(JSON.parse(output[0] || "")).toMatchObject({
+				before: {
+					staleSidecarPids: [60123],
+				},
+				killed: {
+					sidecarProcesses: 1,
+				},
+			});
+		} finally {
+			vi.restoreAllMocks();
+			Object.defineProperty(process, "platform", platform);
+		}
+	}
+
 	it("doctor --fix kills stale code sidecar processes", async () => {
-		const cwd = "/workspace";
+		await assertStaleSidecarFix(
+			"60123 /Users/example/dev/apps/examples/desktop-app/src-tauri/bin/code-sidecar\n",
+		);
+	});
+
+	it("rejects a wrong discovered sidecar through the original fix assertions", async () => {
+		await expect(
+			assertStaleSidecarFix("60124 /synthetic/code-sidecar\n"),
+		).rejects.toMatchObject({
+			name: "AssertionError",
+			message: expect.stringContaining("60123"),
+		});
+	});
+
+	it("rejects a missing discovered sidecar through the original fix assertions", async () => {
+		await expect(assertStaleSidecarFix("")).rejects.toMatchObject({
+			name: "AssertionError",
+			message: expect.stringContaining("60123"),
+		});
+	});
+
+	it("does not query pgrep or kill sidecars on Windows", async () => {
+		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		Object.defineProperty(process, "platform", { value: "win32" });
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		mockReadHubDiscovery.mockResolvedValue(undefined);
 		mockProbeHubServer.mockResolvedValue(undefined);
-		mockSpawnSync.mockImplementation((command: string, args?: string[]) => {
-			if (
-				command === "pgrep" &&
-				Array.isArray(args) &&
-				args[0] === "-fal" &&
-				args[1] === "--" &&
-				args[2] === "/src-tauri/bin/code-sidecar"
-			) {
-				return {
-					status: 0,
-					stdout:
-						"60123 /Users/example/dev/apps/examples/desktop-app/src-tauri/bin/code-sidecar\n",
-				};
-			}
-			return { status: 1, stdout: "" };
-		});
-		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-		const output: string[] = [];
-		const code = await runDoctorCommand(
-			{ cwd, json: true, fix: true },
-			{
-				writeln: (text) => {
-					output.push(text ?? "");
+		try {
+			const output: string[] = [];
+			const code = await runDoctorCommand(
+				{ cwd: "/workspace", json: true, fix: true },
+				{
+					writeln: (text) => {
+						output.push(text ?? "");
+					},
+					writeErr: () => {},
 				},
-				writeErr: () => {},
-			},
-		);
-
-		expect(code).toBe(0);
-		expect(killSpy).toHaveBeenCalledWith(60123, "SIGKILL");
-		expect(JSON.parse(output[0] || "")).toMatchObject({
-			before: {
-				staleSidecarPids: [60123],
-			},
-			killed: {
-				sidecarProcesses: 1,
-			},
-		});
-		killSpy.mockRestore();
+			);
+			expect(code).toBe(0);
+			expect(mockSpawnSync.mock.calls.some((call) => call[0] === "pgrep")).toBe(
+				false,
+			);
+			expect(killSpy).not.toHaveBeenCalled();
+			expect(JSON.parse(output[0] || "")).toMatchObject({
+				before: { staleSidecarPids: [] },
+				killed: { sidecarProcesses: 0 },
+			});
+		} finally {
+			killSpy.mockRestore();
+			Object.defineProperty(process, "platform", platform);
+		}
 	});
 });
 

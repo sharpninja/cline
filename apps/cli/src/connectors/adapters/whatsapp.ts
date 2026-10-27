@@ -478,6 +478,8 @@ class WhatsAppConnector extends ConnectorBase<
 		io: ConnectIo,
 		context: ConnectRunContext,
 	): Promise<number> {
+		const scheduleAdmission = context.scheduleAdmission;
+		const scheduleSelection = { provider: options.provider, model: options.model };
 		const instanceKey = resolveInstanceKey({
 			phoneNumberId: options.phoneNumberId,
 			userName: options.userName,
@@ -631,6 +633,7 @@ class WhatsAppConnector extends ConnectorBase<
 			const runTurn = async () => {
 				try {
 					await handleConnectorUserTurn({
+						...(scheduleAdmission ? { scheduleAdmission, scheduleSelection } : {}),
 						thread,
 						text,
 						client,

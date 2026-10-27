@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import { registerScheduleCommands } from "./schedule/handlers";
-import type { CommandIo } from "./schedule/types";
+import type { CommandIo, ScheduleAdmission } from "./schedule/types";
 
 export function createScheduleCommand(
 	io: CommandIo,
 	setExitCode: (code: number) => void,
+	admission?: ScheduleAdmission,
 ): Command {
 	let actionExitCode = 0;
 	const fail = () => {
@@ -31,6 +32,6 @@ export function createScheduleCommand(
 			setExitCode(actionExitCode);
 		});
 
-	registerScheduleCommands(schedule, io, fail, action);
+	registerScheduleCommands(schedule, io, fail, action, admission);
 	return schedule;
 }

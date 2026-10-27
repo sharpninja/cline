@@ -10,6 +10,9 @@ import {
 	readHubScheduleMode,
 } from "@cline/shared";
 import { asTrimmedString, toPositiveInt } from "./utils";
+import { providerSettingsManager } from "./deps";
+import { admitSchedulePair, readExplicitSchedulePair, requireDirectSchedulePair } from "./qbrain-schedule-admission";
+import { readRegisteredScheduleCatalog } from "./qbrain-schedule-catalog";
 
 let scheduleService: HubScheduleService | undefined;
 let scheduleCommands: HubScheduleCommandService | undefined;
@@ -129,7 +132,7 @@ export async function handleRoutineScheduleCommand(
 			name,
 			...timing,
 			prompt,
-			modelSelection: directScheduleSelection(args),
+			modelSelection: await directScheduleSelection(args),
 			mode: readHubScheduleMode(args, "yolo"),
 			workspaceRoot: routineWorkspaceRoot,
 			cwd: asTrimmedString(args?.cwd),
@@ -156,12 +159,17 @@ export async function handleRoutineScheduleCommand(
 				"updateSchedule requires schedule_id, name, timing, prompt, and workspace_root",
 			);
 		}
+				const hasSelection = !!args && (Object.prototype.hasOwnProperty.call(args, "modelSelection") ||
+			["provider", "providerId", "model", "modelId"].some((key) => args[key] !== undefined));
+		if (hasSelection) validateDirectScheduleSelection(args);
+		const existing = await commandHub("schedule.get", { scheduleId });
+		const selection = await directScheduleSelection(hasSelection ? args : existing.schedule as Record<string, unknown>);
 		const reply = await commandHub("schedule.update", {
 			scheduleId,
 			name,
 			...timing,
 			prompt,
-			modelSelection: directScheduleSelection(args),
+			modelSelection: selection,
 			...(mode === undefined ? {} : { mode }),
 			workspaceRoot: routineWorkspaceRoot,
 			cwd: asTrimmedString(args?.cwd) ?? null,
@@ -189,7 +197,7 @@ export async function handleRoutineScheduleCommand(
 	}
 	if (command === "resume_routine_schedule") {
 		const existing = await commandHub("schedule.get", { scheduleId });
-		assertStoredSchedule(existing.schedule);
+		await assertStoredSchedule(existing.schedule);
 		const reply = await commandHub("schedule.enable", { scheduleId });
 		return { schedule: reply.schedule ?? null };
 	}
@@ -197,7 +205,7 @@ export async function handleRoutineScheduleCommand(
 		const existing = await commandHub("schedule.get", { scheduleId });
 		if (!existing.schedule)
 			throw new Error(`schedule not found: ${scheduleId}`);
-		assertStoredSchedule(existing.schedule);
+		await assertStoredSchedule(existing.schedule);
 		const reply = await commandHub("schedule.trigger", {
 			scheduleId,
 			wait: false,
@@ -211,26 +219,26 @@ export async function handleRoutineScheduleCommand(
 	throw new Error(`unsupported routine schedule command: ${command}`);
 }
 
-function directScheduleSelection(args?: Record<string, unknown>) {
-	const providerId = requireDirectProvider(asTrimmedString(args?.provider));
-	const modelId = asTrimmedString(args?.model);
-	if (!modelId)
-		throw new Error(
-			"Configure an explicit direct provider model for this schedule.",
-		);
-	return { providerId, modelId };
+function validateDirectScheduleSelection(args?: Record<string, unknown>) {
+	if (!args || (!Object.prototype.hasOwnProperty.call(args, "modelSelection") && !asTrimmedString(args.providerId ?? args.provider))) {
+		throw new Error("Select both a direct model provider and model explicitly in Settings.");
+	}
+	return requireDirectSchedulePair(readExplicitSchedulePair(args));
 }
-function assertStoredSchedule(value: unknown): void {
+async function directScheduleSelection(args?: Record<string, unknown>) {
+	validateDirectScheduleSelection(args);
+	return admitSchedulePair(args, (providerId) =>
+		readRegisteredScheduleCatalog(providerId, providerSettingsManager),
+	);
+}
+async function assertStoredSchedule(value: unknown): Promise<void> {
 	if (!value || typeof value !== "object")
 		throw new Error("Schedule not found.");
-	const selection = (
-		value as { modelSelection?: { providerId?: string; modelId?: string } }
-	).modelSelection;
-	requireDirectProvider(selection?.providerId);
-	if (!selection?.modelId?.trim())
-		throw new Error(
-			"Configure an explicit direct provider model for this schedule.",
-		);
+	const pair = readExplicitSchedulePair(value);
+	requireDirectSchedulePair(pair);
+	await admitSchedulePair(value, (providerId) =>
+		readRegisteredScheduleCatalog(providerId, providerSettingsManager),
+	);
 }
 
 export function createDirectScheduleRuntimeHandlers(): ReturnType<

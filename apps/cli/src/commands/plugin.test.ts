@@ -25,6 +25,19 @@ import {
 	runPluginUninstallCommand,
 } from "./plugin";
 
+import {
+	registerPackageCommand,
+	resetPackageCommands,
+	subprocessEffects,
+} from "./plugin-process.test-support";
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	const { withPackageCommandFixtures } = await import(
+		"./plugin-process.test-support"
+	);
+	return { ...actual, spawn: withPackageCommandFixtures(actual.spawn) };
+});
+
 type FetchCall = (
 	...args: Parameters<typeof fetch>
 ) => ReturnType<typeof fetch>;
@@ -39,6 +52,7 @@ describe("plugin install command", () => {
 	let originalMcpSettingsPath: string | undefined;
 
 	beforeEach(() => {
+		resetPackageCommands();
 		root = mkdtempSync(join(tmpdir(), "cli-plugin-install-"));
 		home = join(root, "home");
 		workspace = join(root, "workspace");
@@ -77,6 +91,10 @@ describe("plugin install command", () => {
 	}
 
 	afterEach(() => {
+		if (subprocessEffects.length)
+			console.info(
+				"C_PACKAGE_FIXTURE_INTERACTIONS " + JSON.stringify(subprocessEffects),
+			);
 		vi.useRealTimers();
 		vi.unstubAllGlobals();
 		if (originalHome === undefined) {
@@ -288,6 +306,13 @@ describe("plugin install command", () => {
 			`#!/bin/sh\nprintf '%s\\n' "$PWD $*" >> "${npmLogPath}"\nexit 0\n`,
 			{ encoding: "utf8", mode: 0o755 },
 		);
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, {
+				logPath: npmLogPath,
+				includeCwd: true,
+				exitCode: 0,
+			});
+		}
 
 		const result = await installPlugin({
 			source: "package-plugin",
@@ -421,6 +446,13 @@ describe("plugin install command", () => {
 			`#!/bin/sh\nprintf '%s\\n' "$PWD $*" >> "${npmLogPath}"\nexit 0\n`,
 			{ encoding: "utf8", mode: 0o755 },
 		);
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, {
+				logPath: npmLogPath,
+				includeCwd: true,
+				exitCode: 0,
+			});
+		}
 		await mkdir(join(source, "node_modules", "dependency"), {
 			recursive: true,
 		});
@@ -529,6 +561,24 @@ describe("plugin install command", () => {
 			].join("\n"),
 			{ encoding: "utf8", mode: 0o755 },
 		);
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, {
+				logPath: npmLogPath,
+				exitCode: 0,
+				files: {
+					"node_modules/published-plugin/package.json": JSON.stringify({
+						name: "published-plugin",
+						type: "module",
+						cline: { plugins: ["index.ts"] },
+					}),
+					"node_modules/published-plugin/index.ts":
+						"export default { name: 'published-plugin', manifest: { capabilities: ['tools'] } };\n",
+					"node_modules/@cline/core/package.json": JSON.stringify({
+						name: "@cline/core",
+					}),
+				},
+			});
+		}
 
 		const result = await installPlugin({
 			source: "npm:published-plugin@1.0.0",
@@ -562,7 +612,10 @@ describe("plugin install command", () => {
 		expect(second.installPath).toBe(first.installPath);
 	});
 
-	it("keeps an existing install when a forced replacement fails during staging", async () => {
+	async function assertReplacementFailure(
+		exitCode: number,
+		stderr: string,
+	): Promise<void> {
 		const source = join(root, "replace-package");
 		const npmCommandPath = join(root, "fake-npm.sh");
 		await mkdir(source, { recursive: true });
@@ -589,6 +642,9 @@ describe("plugin install command", () => {
 			encoding: "utf8",
 			mode: 0o755,
 		});
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, { exitCode: 0 });
+		}
 
 		const first = await installPlugin({ source, npmCommand: npmCommandPath });
 		await writeFile(
@@ -600,6 +656,12 @@ describe("plugin install command", () => {
 			encoding: "utf8",
 			mode: 0o755,
 		});
+		if (process.platform !== "win32" && (exitCode !== 1 || stderr !== "offline")) {
+			writeFileSync(npmCommandPath, `#!/bin/sh\nprintf '%s' ${JSON.stringify(stderr)} >&2\nexit ${exitCode}\n`, { encoding: "utf8", mode: 0o755 });
+		}
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, { exitCode, stderr });
+		}
 
 		await expect(
 			installPlugin({ source, force: true, npmCommand: npmCommandPath }),
@@ -609,6 +671,22 @@ describe("plugin install command", () => {
 		expect(
 			readFileSync(join(first.installPath, "package", "index.ts"), "utf8"),
 		).toContain("installed-v1");
+	}
+
+	it("keeps an existing install when a forced replacement fails during staging", async () => {
+		await assertReplacementFailure(1, "offline");
+	});
+
+	it("rejects a wrong success callback through the original rollback assertions", async () => {
+		await expect(assertReplacementFailure(0, "offline")).rejects.toMatchObject({
+			name: "AssertionError",
+		});
+	});
+
+	it("rejects wrong error output through the original rollback assertions", async () => {
+		await expect(
+			assertReplacementFailure(1, "unexpected-response"),
+		).rejects.toMatchObject({ name: "AssertionError" });
 	});
 
 	it("uninstalls a package plugin by package name", async () => {
@@ -638,6 +716,9 @@ describe("plugin install command", () => {
 			encoding: "utf8",
 			mode: 0o755,
 		});
+		if (process.platform === "win32") {
+			registerPackageCommand(npmCommandPath, { exitCode: 0 });
+		}
 
 		const installed = await installPlugin({
 			source,

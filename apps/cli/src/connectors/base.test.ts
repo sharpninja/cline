@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorBase } from "./base";
 import { CONNECT_ALREADY_RUNNING_EXIT_CODE } from "./common";
@@ -129,14 +130,14 @@ describe("ConnectorBase background launch", () => {
 		await new TestConnector().runBackground(io);
 
 		const [message] = vi.mocked(io.writeErr).mock.calls[0] ?? [];
-		expect(message).toContain("logs/connectors/test/test-connector.log");
+		expect(message).toContain(join("logs", "connectors", "test", "test-connector.log"));
 		expect(mocks.spawnDetachedConnector).toHaveBeenCalledWith(
 			["connect", "test"],
 			["--token", "secret"],
 			"CLINE_TEST_CONNECT_CHILD",
 			expect.objectContaining({
 				logPath: expect.stringContaining(
-					"logs/connectors/test/test-connector.log",
+					join("logs", "connectors", "test", "test-connector.log"),
 				),
 			}),
 		);

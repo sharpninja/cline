@@ -35,10 +35,11 @@ function createExecutableScript(contents: string): string {
 
 function runWrapper(target: string, args: string[] = []) {
 	const wrapperPath = createWrapperCopy();
-	return spawnSync(process.execPath, [wrapperPath, ...args], {
+	const wrapperArgs = process.platform === "win32" ? [target, ...args] : args;
+	return spawnSync(process.execPath, [wrapperPath, ...wrapperArgs], {
 		env: {
 			...process.env,
-			CLINE_BIN_PATH: target,
+			CLINE_BIN_PATH: process.platform === "win32" ? process.execPath : target,
 		},
 		encoding: "utf8",
 	});

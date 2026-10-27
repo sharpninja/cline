@@ -17,13 +17,14 @@ import {
 	registerScheduleUpdateCommand,
 } from "./import-export";
 import { resolveScheduleModelSelection } from "./model-selection";
-import type { CommandIo, ScheduleActionWrapper } from "./types";
+import type { CommandIo, ScheduleActionWrapper, ScheduleAdmission } from "./types";
 
 export function registerScheduleCommands(
 	schedule: Command,
 	io: CommandIo,
 	fail: () => void,
 	action: ScheduleActionWrapper,
+	admission?: ScheduleAdmission,
 ): void {
 	const activeCmd = schedule
 		.command("active")
@@ -74,6 +75,7 @@ export function registerScheduleCommands(
 	createCmd.action(
 		action(async (name: string) => {
 			const opts = createCmd.opts();
+			const admittedSelection = admission ? await admission.resolve({ provider: opts.provider, model: opts.model }) : undefined;
 			const metadataJson = parseJsonObjectFlag(opts.metadataJson);
 			const metadata = scheduleMetadata({
 				metadata: metadataJson && {
@@ -93,7 +95,7 @@ export function registerScheduleCommands(
 			}
 			const client = ensured.client;
 			try {
-				const modelSelection = resolveScheduleModelSelection({
+				const modelSelection = admittedSelection ?? resolveScheduleModelSelection({
 					provider: opts.provider,
 					model: opts.model,
 				});
@@ -311,6 +313,7 @@ export function registerScheduleCommands(
 			}
 			const client = ensured.client;
 			try {
+				if (admission) await admission.resolve(await client.getSchedule(scheduleId));
 				const result = await client.resumeSchedule(scheduleId);
 				if (!result) {
 					io.writeErr(`schedule not found: ${scheduleId}`);
@@ -370,6 +373,7 @@ export function registerScheduleCommands(
 			}
 			const client = ensured.client;
 			try {
+				if (admission) await admission.resolve(await client.getSchedule(scheduleId));
 				const execution = await client.triggerScheduleNow(scheduleId);
 				if (!execution) {
 					io.writeErr(`schedule not found: ${scheduleId}`);
@@ -413,6 +417,6 @@ export function registerScheduleCommands(
 	);
 
 	registerScheduleExportCommand(schedule, io, fail, action);
-	registerScheduleImportCommand(schedule, io, fail, action);
-	registerScheduleUpdateCommand(schedule, io, fail, action);
+	registerScheduleImportCommand(schedule, io, fail, action, admission);
+	registerScheduleUpdateCommand(schedule, io, fail, action, admission);
 }

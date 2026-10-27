@@ -20,6 +20,7 @@ import type {
 	ConnectStopResult,
 } from "../connectors/types";
 import { startConnectorViaHub, stopConnectorsViaHub } from "./connect-via-hub";
+import type { ScheduleAdmission } from "./schedule/types";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const INTERACTIVE_FLAGS = new Set(["-i", "--interactive"]);
@@ -154,9 +155,10 @@ export async function runRestartConnector(
 	passthroughArgs: string[],
 	io: ConnectIo,
 	requestedInstanceId?: string,
+	scheduleAdmission?: ScheduleAdmission,
 ): Promise<number> {
 	if (passthroughArgs.some((arg) => HELP_FLAGS.has(arg))) {
-		return await runConnectAdapter(adapterName, passthroughArgs, io);
+		return await runConnectAdapter(adapterName, passthroughArgs, io, scheduleAdmission);
 	}
 	const connector = await getConnector(adapterName);
 	if (!connector) {
@@ -177,7 +179,7 @@ export async function runRestartConnector(
 		instanceId !== undefined &&
 		activeInstances.some((record) => record.instanceId === instanceId);
 	if (!targetIsActive || !instanceId) {
-		return await runConnectAdapter(adapterName, passthroughArgs, io);
+		return await runConnectAdapter(adapterName, passthroughArgs, io, scheduleAdmission);
 	}
 
 	const validationExitCode = await connector.validate(passthroughArgs, io);
@@ -214,6 +216,7 @@ export async function runRestartConnector(
 		adapterName,
 		passthroughArgs,
 		io,
+		scheduleAdmission,
 	);
 	if (replacement.exitCode === 0) {
 		if (replacement.instanceId && replacement.instanceId !== instanceId) {
@@ -241,6 +244,7 @@ export async function runRestartConnector(
 		adapterName,
 		previousConnection.lastSuccessfulArgs,
 		io,
+		scheduleAdmission,
 	);
 	if (rollback.exitCode === 0) {
 		io.writeln(`[connect] restored ${adapterName} instance ${instanceId}`);
@@ -261,6 +265,7 @@ async function runConnectAdapterWithResult(
 	adapterName: string,
 	passthroughArgs: string[],
 	io: ConnectIo,
+	scheduleAdmission?: ScheduleAdmission,
 ): Promise<ConnectAdapterResult> {
 	const connector = await getConnector(adapterName);
 	if (!connector) {
@@ -270,6 +275,7 @@ async function runConnectAdapterWithResult(
 	let persistenceArgs = passthroughArgs;
 	let persistenceInstanceId: string | undefined;
 	const context: ConnectRunContext = {
+		...(scheduleAdmission ? { scheduleAdmission } : {}),
 		setPersistenceArgs: (args) => {
 			persistenceArgs = [...args];
 		},
@@ -381,6 +387,7 @@ export async function runConnectAdapter(
 	adapterName: string,
 	passthroughArgs: string[],
 	io: ConnectIo,
+	scheduleAdmission?: ScheduleAdmission,
 ): Promise<number> {
 	const connector = await getConnector(adapterName);
 	if (connector) {
@@ -393,6 +400,7 @@ export async function runConnectAdapter(
 		adapterName,
 		passthroughArgs,
 		io,
+		scheduleAdmission,
 	);
 	return result.exitCode === CONNECT_ALREADY_RUNNING_EXIT_CODE
 		? 0

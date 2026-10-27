@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
 	CLINE_CONNECTOR_CLI_LAUNCH_ENV,
 	readConnectorCliLaunchSpec,
@@ -10,17 +11,18 @@ import {
 
 describe("menubar connector CLI launch", () => {
 	it("uses the workspace CLI source when it is available", () => {
+        const sourcePath = join("/repo", "apps", "cli", "src", "index.ts");
 		expect(
 			resolveMenubarConnectorCliLaunchSpec("/repo", {
 				env: {},
 				execPath: "/usr/local/bin/bun",
-				exists: (path) => path === "/repo/apps/cli/src/index.ts",
+				exists: (path) => path === sourcePath,
 			}),
 		).toEqual({
 			launcher: "/usr/local/bin/bun",
 			connectArgsPrefix: [
 				"--conditions=development",
-				"/repo/apps/cli/src/index.ts",
+				sourcePath,
 				"connect",
 			],
 			cwd: "/repo",
@@ -56,3 +58,4 @@ describe("menubar connector CLI launch", () => {
 		});
 	});
 });
+

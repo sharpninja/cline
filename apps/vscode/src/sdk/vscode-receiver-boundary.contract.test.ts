@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: Apache-2.0
+// Preparation only; no production imports or network. Execute only under exact O grant.
+import assert from "node:assert/strict";
+import { assertReceiver, cases, controlsFor } from "./vscode-receiver-boundary.contract.test-support";
+import type { Fault, Message } from "./vscode-receiver-boundary.contract.test-support";
+import { model } from "./vscode-receiver-boundary.model.test-support";
+type Trace = { calls: { receiver: number; message: Message; isLast: boolean; sameReference: boolean }[];
+  expected: { receiver: number; message: Message }[]; journal: { boundary: string }[];
+  cleanupRequested: boolean; rejectRequested: boolean; pendingObserved: boolean; settled: boolean };
+const assertionFor: Record<Exclude<Fault, "none">, string> = {
+  trim: "receiver-full-payload", "foreign-ts": "receiver-full-payload", drop: "receiver-call-count", duplicate: "receiver-call-count",
+  "wrong-last": "receiver-stream-is-not-terminal", "clone-reference": "receiver-preserves-reference", reorder: "receiver-order",
+  "ignore-cleanup": "receiver-call-count", "ignore-error": "receiver-call-count", "await-pending": "receiver-fanout-does-not-await-consumer", coalesce: "receiver-call-count",
+};
+function qualifies(fault: Fault, error: unknown): boolean {
+  if (fault === "none" || !(error instanceof assert.AssertionError) || !error.message.startsWith(assertionFor[fault])) return false;
+  const requiredOperator = fault === "trim" || fault === "foreign-ts" ? "deepStrictEqual" : "strictEqual";
+  if (error.operator !== requiredOperator) return false;
+  const e = (error as assert.AssertionError & { interactionEvidence?: Trace }).interactionEvidence;
+  if (!e?.calls || !e.expected || !e.journal) return false;
+  switch (fault) {
+    case "drop": return e.calls.length === 0 && e.expected.length > 0;
+    case "duplicate": return e.calls.length === e.expected.length * 2;
+    case "trim": return e.calls.some((call, i) => e.expected[i] && call.message.text !== e.expected[i].message.text && call.message.text === e.expected[i].message.text.trim());
+    case "foreign-ts": return e.calls.some((call, i) => e.expected[i] && call.message.ts !== e.expected[i].message.ts);
+    case "wrong-last": return e.calls.some(call => call.isLast !== false);
+    case "clone-reference": return e.calls.some(call => call.sameReference === false);
+    case "reorder": return e.calls.length === e.expected.length && e.calls.some((call, i) => call.receiver !== e.expected[i].receiver);
+    case "ignore-cleanup": return e.cleanupRequested && e.journal.some(x => x.boundary === "cleanup") && e.calls.some(call => call.receiver === 0);
+    case "ignore-error": return e.rejectRequested && e.journal.some(x => x.boundary === "receiver-error") && e.calls.filter(call => call.receiver === 0).length > 1;
+    case "await-pending": return e.pendingObserved && !e.settled && e.journal.some(x => x.boundary === "receiver-pending") && !e.calls.some(call => call.receiver === 1);
+    case "coalesce": return e.expected.length === 2 && e.expected[0].message.text === e.expected[1].message.text && e.expected[0].message.ts !== e.expected[1].message.ts && e.calls.length === 1;
+  }
+}
+export async function runMockProof() {
+  const evidence: unknown[] = [], failures: unknown[] = [];
+  let correct = 0, rejectedControls = 0, classifierGuards = 0;
+  const plannedControls = cases.reduce((sum, scenario) => sum + controlsFor(scenario).length, 0);
+  for (const scenario of cases) {
+    let correctTrace: unknown;
+    try { correctTrace = await assertReceiver(scenario, model()); evidence.push(correctTrace); correct++; }
+    catch (error) { failures.push({ name: scenario.name, kind: "correct-model", error: String(error) }); }
+    for (const fault of controlsFor(scenario)) {
+      let rejected: unknown;
+      try { await assertReceiver(scenario, model(fault)); }
+      catch (error) { rejected = error; }
+      if (!qualifies(fault, rejected)) {
+        failures.push({ name: scenario.name, fault, kind: "unqualified-control", error: String(rejected),
+          interactionEvidence: rejected instanceof Error ? (rejected as Error & { interactionEvidence?: Trace }).interactionEvidence : undefined });
+        continue;
+      }
+      rejectedControls++;
+      const original = rejected as assert.AssertionError & { interactionEvidence: Trace; postCleanupEvidence?: unknown };
+      evidence.push({ name: scenario.name, fault, assertion: original.message, operator: original.operator, interactionEvidence: original.interactionEvidence, postCleanupEvidence: original.postCleanupEvidence });
+      const unrelated = new assert.AssertionError({ message: "unrelated assertion", actual: 0, expected: 1, operator: "strictEqual" });
+      Object.assign(unrelated, { interactionEvidence: original.interactionEvidence });
+      const unexercised = new assert.AssertionError({ message: assertionFor[fault], actual: 0, expected: 1, operator: "strictEqual" });
+      Object.assign(unexercised, { interactionEvidence: { ...(correctTrace as object), expected: original.interactionEvidence.expected, cleanupRequested: !!scenario.cleanup, rejectRequested: !!scenario.reject } });
+      const otherFault: Fault = fault === "wrong-last" ? "foreign-ts" : "wrong-last";
+      const wrongOperator = new assert.AssertionError({ message: assertionFor[fault], actual: original.actual, expected: original.expected, operator: original.operator === "strictEqual" ? "deepStrictEqual" : "strictEqual" });
+      Object.assign(wrongOperator, { interactionEvidence: original.interactionEvidence });
+      const guards = [!qualifies(fault, wrongOperator), !qualifies(fault, unrelated), !qualifies(fault, new Error(original.message)), !qualifies(otherFault, original), !qualifies(fault, unexercised)];
+      classifierGuards += guards.filter(Boolean).length;
+      if (guards.some(pass => !pass)) failures.push({ name: scenario.name, fault, kind: "classifier-guard", guards });
+    }
+  }
+  return { mode: "independent-receiver-mock", plannedCorrect: cases.length, correct, plannedControls, rejectedControls,
+    plannedClassifierGuards: plannedControls * 5, classifierGuards, failed: failures.length, skipped: 0, failures, evidence,
+    nativeUi: false, auditCorrelationProved: false, scopeAccepted: false };
+}
+if (process.argv.includes("--mock-proof")) {
+  const proof = await runMockProof(); console.log(JSON.stringify(proof));
+  if (proof.failed || proof.correct !== proof.plannedCorrect || proof.rejectedControls !== proof.plannedControls || proof.classifierGuards !== proof.plannedClassifierGuards) process.exitCode = 1;
+} else {
+  const { it } = await import("vitest");
+  for (const scenario of cases) it(`preserves complete receiver interaction: ${scenario.name}`, async () => { await assertReceiver(scenario, model()); });
+  it("qualifies actual rejecting interactions and rejects unrelated classifier evidence", async () => {
+    const proof = await runMockProof(); assert.equal(proof.failed, 0); assert.equal(proof.correct, proof.plannedCorrect);
+    assert.equal(proof.rejectedControls, proof.plannedControls); assert.equal(proof.classifierGuards, proof.plannedClassifierGuards);
+  });
+}
+

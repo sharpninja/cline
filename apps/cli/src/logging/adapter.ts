@@ -1,5 +1,6 @@
 import {
 	closeSync,
+	fstatSync,
 	existsSync,
 	mkdirSync,
 	openSync,
@@ -128,7 +129,13 @@ function createWritableDestination(
 	try {
 		mkdirSync(dirname(destinationPath), { recursive: true });
 		const fd = openSync(destinationPath, "a");
-		closeSync(fd);
+		try {
+			if (fstatSync(fd).isDirectory()) {
+				return undefined;
+			}
+		} finally {
+			closeSync(fd);
+		}
 		const dest = pino.destination({
 			dest: destinationPath,
 			mkdir: true,

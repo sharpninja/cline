@@ -750,6 +750,8 @@ class SlackConnector extends ConnectorBase<
 		io: ConnectIo,
 		context: ConnectRunContext,
 	): Promise<number> {
+		const scheduleAdmission = context.scheduleAdmission;
+		const scheduleSelection = { provider: options.provider, model: options.model };
 		context.setPersistenceInstanceId(options.userName);
 		const statePath = this.resolveConnectorStatePath(options.userName);
 		const bindingsPath = this.resolveBindingsPath(options.userName);
@@ -943,6 +945,7 @@ class SlackConnector extends ConnectorBase<
 						teamId: currentState.teamId,
 						work: async () =>
 							handleConnectorUserTurn({
+								...(scheduleAdmission ? { scheduleAdmission, scheduleSelection } : {}),
 								thread,
 								text,
 								client,

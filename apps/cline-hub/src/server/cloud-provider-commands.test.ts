@@ -11,6 +11,7 @@ const fake = vi.hoisted(() => ({
 		read: vi.fn(),
 	},
 	models: vi.fn(),
+	registeredModels: vi.fn(),
 	save: vi.fn(),
 	oauth: vi.fn(),
 	add: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("@cline/core", async (importOriginal) => ({
 	Llms: {
 		getProviderIds: () => ["cline", "cline-pass", "openai-codex"],
 		getProvider: fake.info,
+		getModelsForProvider: fake.registeredModels,
 	},
 	ClineAccountService: class {
 		constructor() {
@@ -110,6 +112,7 @@ beforeEach(() => {
 		},
 	});
 	fake.models.mockResolvedValue({ models: [] });
+	fake.registeredModels.mockResolvedValue({ "direct-model": { id: "direct-model" } });
 	fake.oauth.mockResolvedValue({
 		provider: "openai-codex",
 		apiKey: "fixture-only",

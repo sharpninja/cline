@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -45,7 +45,7 @@ function mockExecutables(...paths: string[]): void {
 
 beforeEach(() => {
 	originalPath = process.env.PATH;
-	process.env.PATH = "/usr/local/bin:/usr/bin";
+	process.env.PATH = ["/usr/local/bin", "/usr/bin"].join(delimiter);
 	// Defaults: not WSL, no executables anywhere.
 	hoisted.readFileSyncMock.mockImplementation(() => {
 		throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -67,7 +67,7 @@ afterEach(() => {
 describe("open wrapper (linux)", () => {
 	it("passes through untouched when xdg-open is on PATH", async () => {
 		usePlatform("linux");
-		mockExecutables("/usr/bin/xdg-open");
+		mockExecutables(join("/usr/bin", "xdg-open"));
 		await open("https://example.com", { wait: false });
 		expect(hoisted.realOpenMock).toHaveBeenCalledWith("https://example.com", {
 			wait: false,

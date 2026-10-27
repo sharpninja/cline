@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import "./utils/update-refusal";
+
 import "./utils/storage-bootstrap";
 
 import { isMainThread } from "node:worker_threads";
@@ -99,7 +101,8 @@ if (!isMainThread) {
 		let exitCode = 0;
 		try {
 			const { runCli } = await import("./main");
-			await runCli();
+			const { createQbrainScheduleAdmission } = await import("./commands/schedule/qbrain-admission");
+			await runCli({ scheduleAdmission: createQbrainScheduleAdmission() });
 		} catch (err) {
 			logCliProcessError("runCli", err);
 			writeErr(err instanceof Error ? err.message : String(err));

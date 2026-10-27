@@ -143,7 +143,7 @@ function startupTargetTakesPrecedenceOverMigrationNotice(
 	return target === "config" || target === "history";
 }
 
-export async function runCli(): Promise<void> {
+export async function runCli(options: { scheduleAdmission?: import("./commands/schedule/types").ScheduleAdmission } = {}): Promise<void> {
 	registerClineClientIdentity("cline-cli");
 	installStreamErrorGuards();
 
@@ -445,6 +445,7 @@ export async function runCli(): Promise<void> {
 						connectCmd.args.slice(1),
 						io,
 						opts.restartInstance,
+						...(options.scheduleAdmission ? [options.scheduleAdmission] as const : [] as const),
 					);
 				}
 			} else if (adapter) {
@@ -454,10 +455,11 @@ export async function runCli(): Promise<void> {
 					adapter,
 					connectCmd.args.slice(1),
 					io,
+					...(options.scheduleAdmission ? [options.scheduleAdmission] as const : [] as const),
 				);
 			} else if (isFullTTY) {
 				const { runConnectWizard } = await import("./wizards/connect");
-				ctx.exitCode = await runConnectWizard();
+				ctx.exitCode = await (options.scheduleAdmission ? runConnectWizard(options.scheduleAdmission) : runConnectWizard());
 			} else {
 				writeln(`\nAdapters:\n${formatAdapterList()}`);
 				connectCmd.help();
@@ -576,9 +578,10 @@ export async function runCli(): Promise<void> {
 
 	const createScheduleRuntimeCommand = async () => {
 		const { createScheduleCommand } = await import("./commands/schedule");
+		const { createQbrainScheduleAdmission } = await import("./commands/schedule/qbrain-admission");
 		return createScheduleCommand(io, (code) => {
 			ctx.exitCode = code;
-		});
+		}, createQbrainScheduleAdmission());
 	};
 	const createHubRuntimeCommand = async () => {
 		const { createHubCommand } = await import("./commands/hub");
@@ -596,7 +599,8 @@ export async function runCli(): Promise<void> {
 		.action(async (_opts: unknown, cmd: Command) => {
 			if (cmd.args.length === 0 && isFullTTY) {
 				const { runScheduleWizard } = await import("./wizards/schedule");
-				ctx.exitCode = await runScheduleWizard();
+				const { createQbrainScheduleAdmission } = await import("./commands/schedule/qbrain-admission");
+				ctx.exitCode = await runScheduleWizard(createQbrainScheduleAdmission());
 				return;
 			}
 			const scheduleCmd = await createScheduleRuntimeCommand();

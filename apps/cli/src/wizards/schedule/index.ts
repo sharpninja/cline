@@ -6,6 +6,7 @@ import {
 import { resolveAddress } from "../../commands/schedule/common";
 import { resolveScheduleModelSelection } from "../../commands/schedule/model-selection";
 import { CRON_PRESETS } from "./cron-presets";
+import type { ScheduleAdmission } from "../../commands/schedule/types";
 
 function isCancel(value: unknown): value is symbol {
 	return p.isCancel(value);
@@ -74,7 +75,7 @@ async function pickSchedule(
 	return choice as string;
 }
 
-async function actionCreate(client: HubScheduleClient): Promise<void> {
+async function actionCreate(client: HubScheduleClient, admission?: ScheduleAdmission): Promise<void> {
 	const name = await p.text({
 		message: "Schedule name",
 		placeholder: "nightly-cleanup",
@@ -211,7 +212,7 @@ async function actionCreate(client: HubScheduleClient): Promise<void> {
 		}
 	}
 
-	const modelSelection = resolveScheduleModelSelection({ provider, model });
+	const modelSelection = admission ? await admission.resolve({ provider, model }) : resolveScheduleModelSelection({ provider, model });
 	const created = (await client.createSchedule({
 		name: (name as string).trim(),
 		cronPattern,
@@ -265,9 +266,10 @@ async function actionPause(client: HubScheduleClient): Promise<void> {
 	}
 }
 
-async function actionResume(client: HubScheduleClient): Promise<void> {
+async function actionResume(client: HubScheduleClient, admission?: ScheduleAdmission): Promise<void> {
 	const id = await pickSchedule(client, "Select schedule to resume");
 	if (!id) return;
+	if (admission) await admission.resolve(await client.getSchedule(id));
 	const result = (await client.resumeSchedule(id)) as
 		| ScheduleRecord
 		| undefined;
@@ -281,9 +283,10 @@ async function actionResume(client: HubScheduleClient): Promise<void> {
 	}
 }
 
-async function actionTrigger(client: HubScheduleClient): Promise<void> {
+async function actionTrigger(client: HubScheduleClient, admission?: ScheduleAdmission): Promise<void> {
 	const id = await pickSchedule(client, "Select schedule to trigger now");
 	if (!id) return;
+	if (admission) await admission.resolve(await client.getSchedule(id));
 	const execution = (await client.triggerScheduleNow(id)) as
 		| ExecutionRecord
 		| undefined;
@@ -386,7 +389,7 @@ async function actionUpcoming(client: HubScheduleClient): Promise<void> {
 	}
 }
 
-export async function runScheduleWizard(): Promise<number> {
+export async function runScheduleWizard(admission?: ScheduleAdmission): Promise<number> {
 	p.intro("Scheduled Tasks");
 
 	const s = p.spinner();
@@ -481,7 +484,7 @@ export async function runScheduleWizard(): Promise<number> {
 			try {
 				switch (action) {
 					case "create":
-						await actionCreate(client);
+						await actionCreate(client, admission);
 						break;
 					case "list":
 						await actionList(client);
@@ -490,10 +493,10 @@ export async function runScheduleWizard(): Promise<number> {
 						await actionPause(client);
 						break;
 					case "resume":
-						await actionResume(client);
+						await actionResume(client, admission);
 						break;
 					case "trigger":
-						await actionTrigger(client);
+						await actionTrigger(client, admission);
 						break;
 					case "delete":
 						await actionDelete(client);

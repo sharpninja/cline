@@ -1,15 +1,8 @@
-import {
-	chmod,
-	mkdir,
-	mkdtemp,
-	readFile,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UserInstructionConfigService } from "@cline/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildSlashCommandRegistry,
 	expandUserCommandPrompt,
@@ -21,6 +14,31 @@ import {
 } from "../../tui/interactive-config";
 import type { Config } from "../../utils/types";
 import { createInteractiveConfigDataLoader } from "./config-data";
+
+const settingsWrite = vi.hoisted(() => ({
+	failPath: undefined as string | undefined,
+	attempts: [] as { path: string; bytes: number; rejected: boolean }[],
+}));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		writeFileSync: ((...args: Parameters<typeof actual.writeFileSync>) => {
+			const path = String(args[0]);
+			if (process.platform === "win32" && settingsWrite.failPath)
+				settingsWrite.attempts.push({
+					path,
+					bytes: Buffer.byteLength(String(args[1])),
+					rejected: path === settingsWrite.failPath,
+				});
+			if (process.platform === "win32" && path === settingsWrite.failPath)
+				throw Object.assign(new Error("synthetic settings write denied"), {
+					code: "EACCES",
+				});
+			return actual.writeFileSync(...args);
+		}) as typeof actual.writeFileSync,
+	};
+});
 
 function createConfig(cwd: string): Config {
 	return {
@@ -51,6 +69,13 @@ describe("interactive config data loader", () => {
 	};
 
 	afterEach(async () => {
+		if (settingsWrite.attempts.length)
+			console.info(
+				"C_SETTINGS_WRITE_INTERACTIONS " +
+					JSON.stringify(settingsWrite.attempts),
+			);
+		settingsWrite.failPath = undefined;
+		settingsWrite.attempts.length = 0;
 		if (envSnapshot.CLINE_GLOBAL_SETTINGS_PATH === undefined) {
 			delete process.env.CLINE_GLOBAL_SETTINGS_PATH;
 		} else {
@@ -1074,66 +1099,89 @@ Review with the bundled skill.`,
 		);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"does not mark plugin disabled when MCP disable write fails",
-		async () => {
-			const tempRoot = await mkdtemp(join(tmpdir(), "cli-config-data-"));
-			tempRoots.push(tempRoot);
-			const settingsPath = join(tempRoot, "cline_mcp_settings.json");
-			const globalSettingsPath = join(tempRoot, "global-settings.json");
-			process.env.CLINE_GLOBAL_SETTINGS_PATH = globalSettingsPath;
-			process.env.CLINE_MCP_SETTINGS_PATH = settingsPath;
-			const pluginPath = await writeMcpSettingsPlugin(tempRoot);
-			await writeFile(
-				settingsPath,
-				`${JSON.stringify(
-					{
-						mcpServers: {
-							smoke: {
-								transport: {
-									type: "stdio",
-									command: process.execPath,
-									args: ["-e", "process.exit(0)"],
-								},
-								metadata: {
-									source: "plugin",
-									pluginName: "settings-mcp-plugin",
-									pluginPath,
-								},
+	async function assertFailedMcpDisable(
+		failurePath: "exact" | "missing" | "foreign",
+	): Promise<void> {
+		const tempRoot = await mkdtemp(join(tmpdir(), "cli-config-data-"));
+		tempRoots.push(tempRoot);
+		const settingsPath = join(tempRoot, "cline_mcp_settings.json");
+		const globalSettingsPath = join(tempRoot, "global-settings.json");
+		process.env.CLINE_GLOBAL_SETTINGS_PATH = globalSettingsPath;
+		process.env.CLINE_MCP_SETTINGS_PATH = settingsPath;
+		const pluginPath = await writeMcpSettingsPlugin(tempRoot);
+		await writeFile(
+			settingsPath,
+			`${JSON.stringify(
+				{
+					mcpServers: {
+						smoke: {
+							transport: {
+								type: "stdio",
+								command: process.execPath,
+								args: ["-e", "process.exit(0)"],
+							},
+							metadata: {
+								source: "plugin",
+								pluginName: "settings-mcp-plugin",
+								pluginPath,
 							},
 						},
 					},
-					null,
-					2,
-				)}\n`,
-			);
-			await chmod(settingsPath, 0o444);
-			const loader = createInteractiveConfigDataLoader({
-				config: createConfig(tempRoot),
-			});
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		let nativeReadonlyPath: string | undefined;
+		if (process.platform === "win32") {
+			settingsWrite.failPath = failurePath === "exact" ? settingsPath : failurePath === "foreign" ? settingsPath + ".foreign" : undefined;
+		} else if (failurePath !== "missing") {
+			nativeReadonlyPath = failurePath === "exact" ? settingsPath : settingsPath + ".foreign";
+			if (failurePath === "foreign") await writeFile(nativeReadonlyPath, "{}\n", "utf8");
+			await chmod(nativeReadonlyPath, 0o444);
+		}
+		const loader = createInteractiveConfigDataLoader({
+			config: createConfig(tempRoot),
+		});
 
-			try {
-				await expect(
-					loader.onToggleConfigItem({
-						id: pluginPath,
-						name: "settings-mcp-plugin",
-						path: pluginPath,
-						enabled: true,
-						source: "workspace-plugin",
-						kind: "plugin",
-					}),
-				).rejects.toThrow();
-			} finally {
-				await chmod(settingsPath, 0o644);
-			}
+		try {
+			await expect(
+				loader.onToggleConfigItem({
+					id: pluginPath,
+					name: "settings-mcp-plugin",
+					path: pluginPath,
+					enabled: true,
+					source: "workspace-plugin",
+					kind: "plugin",
+				}),
+			).rejects.toThrow();
+		} finally {
+			if (nativeReadonlyPath) await chmod(nativeReadonlyPath, 0o644);
+			settingsWrite.failPath = undefined;
+		}
 
-			await expect(readFile(globalSettingsPath, "utf8")).rejects.toThrow();
-			const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
-				mcpServers?: Record<string, { disabled?: boolean }>;
-			};
-			expect(settings.mcpServers?.smoke?.disabled).toBeUndefined();
-		},
-	);
+		await expect(readFile(globalSettingsPath, "utf8")).rejects.toThrow();
+		const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+			mcpServers?: Record<string, { disabled?: boolean }>;
+		};
+		expect(settings.mcpServers?.smoke?.disabled).toBeUndefined();
+	}
+
+	it("does not mark plugin disabled when MCP disable write fails", async () => {
+		await assertFailedMcpDisable("exact");
+	});
+
+	it("rejects missing write failure through original MCP disable assertions", async () => {
+		await expect(assertFailedMcpDisable("missing")).rejects.toMatchObject({
+			name: "AssertionError",
+		});
+	});
+
+	it("rejects foreign-path write failure through original MCP disable assertions", async () => {
+		await expect(assertFailedMcpDisable("foreign")).rejects.toMatchObject({
+			name: "AssertionError",
+		});
+	});
 
 	it("surfaces MCP OAuth status and errors", async () => {
 		const tempRoot = await mkdtemp(join(tmpdir(), "cli-config-data-"));
