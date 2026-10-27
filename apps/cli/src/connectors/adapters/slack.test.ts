@@ -437,6 +437,7 @@ describe("slack binding lookup", () => {
 describe("slack legacy connector state", () => {
 	it("stops a live connector recorded by a pre-claim state file (no claimId)", async () => {
 		const { spawn } = await import("node:child_process");
+		const { once } = await import("node:events");
 		const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import(
 			"node:fs"
 		);
@@ -451,6 +452,7 @@ describe("slack legacy connector state", () => {
 			["-e", "setInterval(() => {}, 1000)"],
 			{ stdio: "ignore" },
 		);
+		const closed = once(child, "close");
 		try {
 			const stateDir = join(dataDir, "connectors", "slack");
 			mkdirSync(stateDir, { recursive: true });
@@ -471,9 +473,14 @@ describe("slack legacy connector state", () => {
 			const io = { writeln: () => {}, writeErr: () => {} };
 			const result = await slackConnector.stopInstance?.("mybot", io);
 
+			console.info(
+				"C_SLACK_LEGACY_STOP_RESULT " +
+					JSON.stringify({ result, dataDir, childPid: child.pid }),
+			);
 			expect(result?.stoppedProcesses).toBe(1);
 		} finally {
 			child.kill("SIGKILL");
+			await closed;
 			if (previousDataDir === undefined) {
 				delete process.env.CLINE_DATA_DIR;
 			} else {

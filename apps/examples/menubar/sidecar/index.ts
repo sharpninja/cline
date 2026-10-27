@@ -17,6 +17,7 @@ import {
 	isBunEmbeddedModulePath,
 	type SessionRecord,
 } from "@cline/shared";
+import { launchBackgroundChat } from "./background-chat";
 import { configureMenubarConnectorCliLaunch } from "./connector-cli-launch";
 
 interface TrackedClient {
@@ -597,61 +598,22 @@ async function main(): Promise<void> {
 	}
 
 	async function startBackgroundChat(prompt: string): Promise<void> {
-		const trimmedPrompt = prompt.trim();
-		if (!trimmedPrompt) {
-			return;
-		}
-		if (!lastSessionContext) {
-			emit({
-				type: "notification",
-				title: "New chat failed",
-				body: "No recent workspace and model context is available yet.",
-				severity: "error",
-			});
-			return;
-		}
-		try {
-			const cwd = lastSessionContext.cwd ?? lastSessionContext.workspaceRoot;
-			const launchAuth = resolveProviderLaunchAuth(
-				providerSettingsManager,
-				lastSessionContext.provider,
-			);
-			const started = await sessionClient.startRuntimeSession({
-				workspaceRoot: lastSessionContext.workspaceRoot,
-				cwd,
-				provider: lastSessionContext.provider,
-				model: lastSessionContext.model,
-				apiKey: launchAuth.apiKey,
-				enableTools: true,
-				enableSpawn: false,
-				enableTeams: true,
-				autoApproveTools: true,
-				source: "cline-menubar",
-				interactive: false,
-			});
-			await sessionClient.sendRuntimeSession(started.sessionId, {
-				config: {
-					workspaceRoot: lastSessionContext.workspaceRoot,
-					cwd,
-					provider: lastSessionContext.provider,
-					model: lastSessionContext.model,
-					apiKey: launchAuth.apiKey,
-					enableTools: true,
-					enableSpawn: false,
-					enableTeams: true,
-				},
-				prompt: trimmedPrompt,
-			});
-		} catch (error) {
-			emit({
-				type: "notification",
-				title: "New chat failed",
-				body: error instanceof Error ? error.message : String(error),
-				severity: "error",
-			});
-		}
+		await launchBackgroundChat(prompt, {
+			context: () => lastSessionContext,
+			auth: (provider) =>
+				resolveProviderLaunchAuth(providerSettingsManager, provider),
+			start: (input) => sessionClient.startRuntimeSession(input),
+			send: (sessionId, input) =>
+				sessionClient.sendRuntimeSession(sessionId, input),
+			notify: (body) =>
+				emit({
+					type: "notification",
+					title: "New chat failed",
+					body,
+					severity: "error",
+				}),
+		});
 	}
-
 	async function shutdownHub(): Promise<void> {
 		try {
 			await stopLocalHubServerGracefully();
@@ -966,3 +928,4 @@ if (claimedDaemonSentinel || isBundledDaemonEntryInvocation()) {
 		process.exit(1);
 	});
 }
+

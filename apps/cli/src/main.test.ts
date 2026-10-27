@@ -424,6 +424,24 @@ describe("runCli lightweight command dispatch", () => {
 		expect(mockState.runAgentCalls).toBe(0);
 	});
 
+	it("forwards explicitly supplied private schedule admission without changing generic dispatch", async () => {
+		process.argv = ["bun", "src/index.ts", "connect", "telegram", "-i"];
+		const policy = { resolve: vi.fn(async () => ({ provider: "direct-a", model: "model-a" })) };
+		const { runCli } = await import("./main");
+		await runCli({ scheduleAdmission: policy });
+		expect(connectMocks.runConnectAdapter).toHaveBeenCalledWith("telegram", ["-i"], expect.any(Object), policy);
+		expect(policy.resolve).not.toHaveBeenCalled();
+	});
+
+	it("forwards private schedule admission through restart dispatch", async () => {
+		process.argv = ["bun", "src/index.ts", "connect", "--restart", "telegram", "-i"];
+		const policy = { resolve: vi.fn(async () => ({ provider: "direct-a", model: "model-a" })) };
+		const { runCli } = await import("./main");
+		await runCli({ scheduleAdmission: policy });
+		expect(connectMocks.runRestartConnector).toHaveBeenCalledWith("telegram", ["-i"], expect.any(Object), undefined, policy);
+		expect(policy.resolve).not.toHaveBeenCalled();
+	});
+
 	it("routes connector restart arguments through the restart lifecycle", async () => {
 		process.argv = [
 			"bun",

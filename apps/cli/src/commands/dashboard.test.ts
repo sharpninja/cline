@@ -234,7 +234,7 @@ describe("private dashboard storage cleanup", () => {
 			openBrowser: false,
 			io: { writeln: () => {}, writeErr: (text) => errors.push(text) },
 			startServer: async () => {
-				expect(process.env.CLINE_QB_DATA_DIR).toBe("/tmp/qb-dashboard-state");
+				expect(process.env.CLINE_QB_DATA_DIR).toBe(resolve("/tmp/qb-dashboard-state"));
 				if (stage === "start") throw new Error("fixture startup failure");
 				return {
 					listenUrl: "http://127.0.0.1:8797",
@@ -244,7 +244,7 @@ describe("private dashboard storage cleanup", () => {
 				};
 			},
 			waitForShutdown: async () => {
-				expect(process.env.CLINE_QB_DATA_DIR).toBe("/tmp/qb-dashboard-state");
+				expect(process.env.CLINE_QB_DATA_DIR).toBe(resolve("/tmp/qb-dashboard-state"));
 				throw new Error("fixture shutdown failure");
 			},
 		});

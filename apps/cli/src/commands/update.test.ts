@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	getInstallationInfo,
@@ -64,5 +64,5 @@ it("keeps the existing nonproduction hub owner resolver", () => {
 	vi.stubEnv("CLINE_DATA_DIR", file("data/placeholder"));
 	vi.stubEnv("CLINE_HUB_DISCOVERY_PATH", "");
 	const owner = resolveCliHubOwnerContext();
-	expect(owner.discoveryPath).toContain("/locks/hub/owners/");
+	expect(owner.discoveryPath).toContain(sep + join("locks", "hub", "owners") + sep);
 });

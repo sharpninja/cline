@@ -483,6 +483,8 @@ class GoogleChatConnector extends ConnectorBase<
 		io: ConnectIo,
 		context: ConnectRunContext,
 	): Promise<number> {
+		const scheduleAdmission = context.scheduleAdmission;
+		const scheduleSelection = { provider: options.provider, model: options.model };
 		context.setPersistenceInstanceId(options.userName);
 		const statePath = this.resolveConnectorStatePath(options.userName);
 		const bindingsPath = this.resolveBindingsPath(options.userName);
@@ -634,6 +636,7 @@ class GoogleChatConnector extends ConnectorBase<
 			const runTurn = async () => {
 				try {
 					await handleConnectorUserTurn({
+						...(scheduleAdmission ? { scheduleAdmission, scheduleSelection } : {}),
 						thread,
 						text,
 						client,

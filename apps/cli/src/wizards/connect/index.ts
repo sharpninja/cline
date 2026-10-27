@@ -126,7 +126,7 @@ async function collectSecurity(
 	return args;
 }
 
-export async function runConnectWizard(): Promise<number> {
+export async function runConnectWizard(scheduleAdmission?: import("../../commands/schedule/types").ScheduleAdmission): Promise<number> {
 	p.intro("Connect a messaging platform");
 
 	const platformId = await p.select({
@@ -229,5 +229,5 @@ export async function runConnectWizard(): Promise<number> {
 			if (text) console.log(text);
 		},
 		writeErr: (text) => console.error(text),
-	});
+	}, scheduleAdmission);
 }

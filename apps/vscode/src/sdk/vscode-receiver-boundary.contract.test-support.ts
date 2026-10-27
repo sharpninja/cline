@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+// Test preparation only. FR-QB-003 AC-QB-069 TEST-QB-069, partial support for
+// AC-QB-005/007/013. Existing receiver behavior is preserved, not governed here.
+// UC-QB-003.flow-5.step-5/31 and flow-6.step-32 remain unaccepted.
+import assert from "node:assert/strict";
+export type Message = { ts: number; type: number; say: number; text: string; partial: boolean; seq: number; epoch: number };
+export type Handler = (message: Message, isLast: boolean) => Promise<void>;
+export type Registry = { registerRequest(id: string, cleanup: () => void, metadata: unknown, handler: Handler): void };
+export type Receiver = { subscribe(handler: Handler, requestId: string): Promise<void>; send(message: Message): Promise<void> };
+export type Factory = (registry: Registry) => Promise<Receiver>;
+export type Fault = "none" | "trim" | "foreign-ts" | "drop" | "duplicate" | "wrong-last" | "clone-reference" |
+  "reorder" | "ignore-cleanup" | "ignore-error" | "await-pending" | "coalesce";
+export type Case = { name: string; text: string; messages: number; receivers: number; late?: boolean; pending?: boolean; cleanup?: boolean; reject?: boolean };
+const raw = "  ## final\r\n\t\u96ea \u{1f642} **complete**\n\n";
+export const cases: readonly Case[] = [
+  { name: "full-final-message", text: raw, messages: 1, receivers: 1 },
+  { name: "explicit-empty-final", text: "", messages: 1, receivers: 1 },
+  { name: "prepared-after-later-fixture-hook", text: raw, messages: 1, receivers: 1, late: true },
+  { name: "equal-text-distinct-timestamps", text: raw, messages: 2, receivers: 1 },
+  { name: "ordered-two-receivers", text: raw, messages: 1, receivers: 2 },
+  { name: "pending-first-does-not-block-second", text: raw, messages: 1, receivers: 2, pending: true },
+  { name: "registered-cleanup-detaches-only-first", text: raw, messages: 1, receivers: 2, cleanup: true },
+  { name: "failed-first-detaches-before-next-message", text: raw, messages: 2, receivers: 2, reject: true },
+];
+export function controlsFor(c: Case): Fault[] {
+  const faults: Fault[] = ["foreign-ts", "drop", "duplicate", "wrong-last", "clone-reference"];
+  if (c.text !== c.text.trim()) faults.push("trim");
+  if (c.receivers === 2 && !c.cleanup) faults.push("reorder");
+  if (c.cleanup) faults.push("ignore-cleanup");
+  if (c.reject) faults.push("ignore-error");
+  if (c.pending) faults.push("await-pending");
+  if (c.messages === 2 && !c.reject) faults.push("coalesce");
+  return faults;
+}
+export async function assertReceiver(c: Case, factory: Factory) {
+  const calls: { receiver: number; snapshot: Message; original: Message; isLast: boolean }[] = [];
+  const journal: unknown[] = [], cleanups = new Map<string, () => void>();
+  const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
+  const messages: Message[] = Array.from({ length: c.messages }, (_, index) => ({
+    ts: 101 + index, type: 1, say: 4, text: c.late ? "earlier fixture hook" : c.text, partial: false, seq: 701 + index, epoch: 17,
+  }));
+  // A later fixture callback prepares the input BEFORE this receiver boundary.
+  // This is not proof of SDK hook ordering or final native UI delivery.
+  if (c.late) { journal.push({ boundary: "fixture-earlier-hook", text: messages[0].text }); messages[0].text = c.text; }
+  const expectedMessages = messages.map((m, index) => ({ ts: 101 + index, type: 1, say: 4, text: c.text, partial: false, seq: 701 + index, epoch: 17 }));
+  const expected: { receiver: number; message: Message }[] = [];
+  let settled = false, pendingObserved = false, rejectCount = 0;
+  const outstanding: Promise<void>[] = [];
+  let failedAssertion: assert.AssertionError | undefined;
+  const registry: Registry = {
+    registerRequest(id, cleanup, metadata, handler) {
+      journal.push({ boundary: "register", id, metadata, hasHandler: typeof handler === "function" });
+      cleanups.set(id, cleanup);
+    },
+  };
+  const adapter = await factory(registry);
+  try {
+    for (let receiver = 0; receiver < c.receivers; receiver++) {
+      await adapter.subscribe(async (message, isLast) => {
+        calls.push({ receiver, snapshot: structuredClone(message), original: message, isLast });
+        journal.push({ boundary: "receiver", receiver, message: structuredClone(message), isLast });
+        if (c.pending && receiver === 0) { journal.push({ boundary: "receiver-pending", receiver }); entered.resolve(); await release.promise; }
+        if (c.reject && receiver === 0 && rejectCount++ === 0) { journal.push({ boundary: "receiver-error", receiver }); throw new Error("synthetic consumer failure"); }
+      }, `synthetic-receiver-${receiver}`);
+    }
+    if (c.cleanup) { cleanups.get("synthetic-receiver-0")?.(); journal.push({ boundary: "cleanup", id: "synthetic-receiver-0" }); }
+    for (const [index, message] of messages.entries()) {
+      for (let receiver = 0; receiver < c.receivers; receiver++) {
+        if ((c.cleanup || (c.reject && index > 0)) && receiver === 0) continue;
+        expected.push({ receiver, message: expectedMessages[index] });
+      }
+      journal.push({ boundary: "send", input: structuredClone(message) });
+      const pending = adapter.send(message).then(() => { settled = true; });
+      outstanding.push(pending);
+      if (c.pending) {
+        try {
+          await Promise.race([entered.promise, pending]); await Promise.resolve();
+          pendingObserved = true;
+          assert.equal(settled, true, "receiver-fanout-does-not-await-consumer");
+        } finally { release.resolve(); }
+      }
+      await pending;
+      await Promise.resolve(); // Let the existing rejection-removal callback run before another send.
+    }
+    assert.equal(calls.length, expected.length, "receiver-call-count");
+    for (const [index, call] of calls.entries()) {
+      assert.equal(call.receiver, expected[index].receiver, "receiver-order");
+      assert.deepStrictEqual(call.snapshot, expected[index].message, "receiver-full-payload");
+      assert.equal(call.isLast, false, "receiver-stream-is-not-terminal");
+      assert.strictEqual(call.original, messages.find(m => m.ts === expected[index].message.ts), "receiver-preserves-reference");
+    }
+    const evidence = { name: c.name, journal, calls: calls.map(call => ({ receiver: call.receiver, message: call.snapshot, isLast: call.isLast, sameReference: messages.includes(call.original) })), pendingObserved, settled,
+      evidenceLevel: "synthetic-receiver-callback-boundary-only", nativeUi: false, auditCorrelationProved: false };
+    return evidence;
+  } catch (error) {
+    if (error instanceof assert.AssertionError) { failedAssertion = error; Object.assign(error, { interactionEvidence: {
+      name: c.name, calls: calls.map(call => ({ receiver: call.receiver, message: call.snapshot, isLast: call.isLast, sameReference: messages.includes(call.original) })),
+      journal: structuredClone(journal), expected, cleanupRequested: !!c.cleanup, rejectRequested: !!c.reject, pendingObserved, settled,
+    } }); }
+    throw error;
+  } finally {
+    release.resolve(); await Promise.allSettled(outstanding);
+    for (const cleanup of cleanups.values()) cleanup();
+    if (failedAssertion) Object.assign(failedAssertion, { postCleanupEvidence: { journal: structuredClone(journal), calls: calls.map(call => ({ receiver: call.receiver, message: call.snapshot, isLast: call.isLast, sameReference: messages.includes(call.original) })) } });
+  }
+}
+
+
+

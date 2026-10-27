@@ -19,7 +19,7 @@ import {
 	scheduleMetadata,
 } from "./delivery-input";
 import { resolveScheduleModelSelection } from "./model-selection";
-import type { CommandIo, ScheduleActionWrapper } from "./types";
+import type { CommandIo, ScheduleActionWrapper, ScheduleAdmission } from "./types";
 
 function stringValue(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
@@ -118,11 +118,19 @@ export function registerScheduleExportCommand(
 	);
 }
 
+async function readImportedSchedule(sourcePath: string): Promise<Record<string, unknown>> {
+  const raw = await readFile(sourcePath, "utf8");
+  if (isJsonPath(sourcePath)) return JSON.parse(raw) as Record<string, unknown>;
+  const yaml = await import("yaml");
+  return yaml.parse(raw) as Record<string, unknown>;
+}
+
 export function registerScheduleImportCommand(
 	schedule: Command,
 	io: CommandIo,
 	fail: () => void,
 	action: ScheduleActionWrapper,
+	admission?: ScheduleAdmission,
 ): void {
 	const importCmd = schedule
 		.command("import")
@@ -132,6 +140,8 @@ export function registerScheduleImportCommand(
 	importCmd.action(
 		action(async (sourcePath: string) => {
 			const opts = importCmd.opts();
+			const admittedSource = admission ? await readImportedSchedule(sourcePath) : undefined;
+			const admittedSelection = admission ? await admission.resolve(admittedSource) : undefined;
 			const address = resolveAddress(opts.address);
 			const ensured = await ensureSchedulerHub(address, process.cwd(), io);
 			if (!ensured.ok) {
@@ -143,14 +153,7 @@ export function registerScheduleImportCommand(
 			}
 			const client = ensured.client;
 			try {
-				const sourceRaw = await readFile(sourcePath, "utf8");
-				let parsed: Record<string, unknown>;
-				if (isJsonPath(sourcePath)) {
-					parsed = JSON.parse(sourceRaw) as Record<string, unknown>;
-				} else {
-					const yaml = await import("yaml");
-					parsed = yaml.parse(sourceRaw) as Record<string, unknown>;
-				}
+				const parsed = admittedSource ?? await readImportedSchedule(sourcePath);
 				const workspaceRoot = String(
 					parsed.workspaceRoot ?? parsed.workspace_root ?? "",
 				).trim();
@@ -161,7 +164,7 @@ export function registerScheduleImportCommand(
 					fail();
 					return;
 				}
-				const { provider, model } = resolveImportedModelSelection(parsed);
+				const { provider, model } = admittedSelection ?? resolveImportedModelSelection(parsed);
 				const metadata =
 					parsed.metadata &&
 					typeof parsed.metadata === "object" &&
@@ -230,6 +233,7 @@ export function registerScheduleUpdateCommand(
 	io: CommandIo,
 	fail: () => void,
 	action: ScheduleActionWrapper,
+	admission?: ScheduleAdmission,
 ): void {
 	const updateCmd = schedule
 		.command("update")
@@ -258,6 +262,8 @@ export function registerScheduleUpdateCommand(
 	updateCmd.action(
 		action(async (scheduleId: string) => {
 			const opts = updateCmd.opts();
+			const explicitSelection = admission && !opts.pause && !opts.resume && (opts.provider !== undefined || opts.model !== undefined)
+				? { provider: opts.provider, model: opts.model } : undefined;
 			const address = resolveAddress(opts.address);
 			const ensured = await ensureSchedulerHub(address, process.cwd(), io);
 			if (!ensured.ok) {
@@ -276,11 +282,14 @@ export function registerScheduleUpdateCommand(
 					return;
 				}
 				if (opts.resume) {
+					if (admission) await admission.resolve(await client.getSchedule(scheduleId));
 					const result = await client.resumeSchedule(scheduleId);
 					emitJsonOrText(!!opts.json, io, result ?? { updated: false });
 					if (!result) fail();
 					return;
 				}
+				const currentSelectionSource = admission ? await client.getSchedule(scheduleId) : undefined;
+				const admittedSelection = admission ? await admission.resolve(explicitSelection ?? currentSelectionSource) : undefined;
 				let metadata: Record<string, unknown> | undefined;
 				const metadataJson = parseJsonObjectFlag(opts.metadataJson);
 				if (metadataJson || hasDeliveryFlags(opts)) {
@@ -305,8 +314,8 @@ export function registerScheduleUpdateCommand(
 					name: opts.name,
 					cronPattern: opts.cron,
 					prompt: opts.prompt,
-					provider: opts.provider,
-					model: opts.model,
+					provider: admittedSelection?.provider ?? opts.provider,
+					model: admittedSelection?.model ?? opts.model,
 					mode: parseMode(opts.mode),
 					workspaceRoot: opts.workspace,
 					cwd: opts.cwd,

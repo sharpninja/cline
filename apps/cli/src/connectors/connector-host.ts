@@ -10,6 +10,7 @@ import { isUnusableSessionError } from "@cline/core";
 import type { GeneratedMedia } from "@cline/shared";
 import type { SentMessage, Thread } from "chat";
 import type { CliLoggerAdapter } from "../logging/adapter";
+import type { ScheduleAdmission } from "../commands/schedule/types";
 import { buildUserInputMessage, resolveSystemPrompt } from "../runtime/prompt";
 import {
 	type ChatCommandHost,
@@ -328,6 +329,9 @@ type ConnectorUserTurnInput<TState extends ConnectorThreadState> = {
 	client: HubSessionClient;
 	pendingApprovals: Map<string, PendingConnectorApproval>;
 	baseStartRequest: ChatStartSessionRequest;
+	// Private composition provides raw explicit options. Effective runtime defaults are not provenance.
+	scheduleSelection?: unknown;
+	scheduleAdmission?: ScheduleAdmission;
 	explicitSystemPrompt: string | undefined;
 	clientId: string;
 	logger: CliLoggerAdapter;
@@ -903,6 +907,9 @@ export async function handleConnectorUserTurn<
 						input.baseStartRequest,
 						effectiveCurrent,
 					);
+					const schedulePair = input.scheduleAdmission
+						? await input.scheduleAdmission.resolve(input.scheduleSelection)
+						: undefined;
 					const metadata = {
 						delivery: {
 							adapter: input.transport,
@@ -922,8 +929,8 @@ export async function handleConnectorUserTurn<
 						name,
 						cronPattern,
 						prompt,
-						provider: config.provider,
-						model: config.model,
+						provider: schedulePair?.provider ?? config.provider,
+						model: schedulePair?.model ?? config.model,
 						mode: config.mode,
 						workspaceRoot: config.workspaceRoot,
 						cwd: config.cwd,
@@ -976,6 +983,10 @@ export async function handleConnectorUserTurn<
 						.join("\n\n");
 				},
 				trigger: async (scheduleId) => {
+					if (input.scheduleAdmission) {
+						const stored = await input.client.getSchedule(scheduleId);
+						await input.scheduleAdmission.resolve(stored);
+					}
 					const execution = await input.client.triggerScheduleNow(scheduleId);
 					if (!execution) {
 						return `Schedule not found: ${scheduleId}`;

@@ -8,7 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import pino from "pino";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCliBuildInfo } from "../utils/common";
 import {
 	createCliLoggerAdapter,
@@ -16,6 +16,7 @@ import {
 	shutdownCliLoggerAdapters,
 } from "./adapter";
 import { logCliProcessError } from "./errors";
+import { beginLoggingTrace, finishLoggingTrace, markLoggingTrace } from "./adapter-trace.test-support";
 
 const envKeys = [
 	"CLINE_DATA_DIR",
@@ -54,9 +55,13 @@ function restoreEnv(
 const commandName = getCliBuildInfo().name;
 
 describe("createCliLoggerAdapter", () => {
+	beforeEach(({ task }) => { beginLoggingTrace(task.name); });
 	afterEach(() => {
+		markLoggingTrace("afterEach.shutdown", "before");
 		shutdownCliLoggerAdapters();
+		markLoggingTrace("afterEach.shutdown", "after");
 		vi.restoreAllMocks();
+		finishLoggingTrace();
 	});
 
 	it("resolves default runtime config from data dir", () => {

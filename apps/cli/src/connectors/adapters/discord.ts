@@ -998,6 +998,8 @@ class DiscordConnector extends ConnectorBase<
 		io: ConnectIo,
 		context: ConnectRunContext,
 	): Promise<number> {
+		const scheduleAdmission = context.scheduleAdmission;
+		const scheduleSelection = { provider: options.provider, model: options.model };
 		context.setPersistenceInstanceId(options.applicationId);
 		const statePath = this.resolveConnectorStatePath(options.applicationId);
 		const bindingsPath = this.resolveBindingsPath(options.applicationId);
@@ -1144,6 +1146,7 @@ class DiscordConnector extends ConnectorBase<
 			const runTurn = async () => {
 				try {
 					await handleConnectorUserTurn({
+						...(scheduleAdmission ? { scheduleAdmission, scheduleSelection } : {}),
 						thread,
 						text,
 						runtimeText: formatDiscordRuntimeText(text, context?.participant, {

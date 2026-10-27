@@ -704,6 +704,8 @@ class TelegramConnector extends ConnectorBase<
 		io: ConnectIo,
 		context: ConnectRunContext,
 	): Promise<number> {
+		const scheduleAdmission = context.scheduleAdmission;
+		const scheduleSelection = { provider: inputOptions.provider, model: inputOptions.model };
 		if (
 			!inputOptions.botUsername &&
 			!inputOptions.interactive &&
@@ -889,6 +891,7 @@ class TelegramConnector extends ConnectorBase<
 			const runTurn = async () => {
 				try {
 					await handleConnectorUserTurn({
+						...(scheduleAdmission ? { scheduleAdmission, scheduleSelection } : {}),
 						thread,
 						text,
 						client,

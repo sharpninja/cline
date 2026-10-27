@@ -1,3 +1,5 @@
+import { UPSTREAM_UPDATE_DISABLED_MESSAGE } from './update-policy';
+export { UPSTREAM_UPDATE_DISABLED_MESSAGE } from './update-policy';
 import { realpathSync } from "node:fs";
 import {
 	resolveProductionHubOwnerContext,
@@ -7,8 +9,7 @@ import { resolveClineBuildEnv } from "@cline/shared";
 import { writeErr } from "../utils/output";
 import type { KanbanInstaller } from "./kanban";
 
-export const UPSTREAM_UPDATE_DISABLED_MESSAGE =
-	"Upstream Cline updates are unavailable in cline-qb. Install a matching reviewed cline-qb build and restart.";
+
 
 export enum PackageManager {
 	NPM = "npm",

@@ -413,20 +413,25 @@ export async function stopConnectorSessions(input: {
 		client.close();
 	}
 
-	const service = new CoreSessionService(new SqliteSessionStore());
-	const rows = await service.listSessions(5000);
-	const filtered = rows.filter((row) => {
-		if (row.parentSessionId?.trim()) {
-			return false;
-		}
-		return input.localMatcher(parseLocalRowMetadata(row));
-	});
-	await Promise.allSettled(
-		filtered.map(async (row) => {
-			await service.deleteSession(row.sessionId);
-		}),
-	);
-	return filtered.length;
+	const store = new SqliteSessionStore();
+	const service = new CoreSessionService(store);
+	try {
+		const rows = await service.listSessions(5000);
+		const filtered = rows.filter((row) => {
+			if (row.parentSessionId?.trim()) {
+				return false;
+			}
+			return input.localMatcher(parseLocalRowMetadata(row));
+		});
+		await Promise.allSettled(
+			filtered.map(async (row) => {
+				await service.deleteSession(row.sessionId);
+			}),
+		);
+		return filtered.length;
+	} finally {
+		store.close();
+	}
 }
 
 export { readSessionMessageCount, readSessionReplyText };

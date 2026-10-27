@@ -9,7 +9,10 @@ export type ConnectStopResult = {
 	stoppedSessions: number;
 };
 
+import type { ScheduleAdmission } from "../commands/schedule/types";
+
 export type ConnectRunContext = {
+	scheduleAdmission?: ScheduleAdmission;
 	setPersistenceArgs: (args: string[]) => void;
 	setPersistenceInstanceId: (instanceId: string) => void;
 };

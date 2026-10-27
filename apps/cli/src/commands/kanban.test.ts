@@ -11,6 +11,13 @@ import {
 	shouldDetachKanbanProcess,
 } from "./kanban";
 
+import { registerKanbanCommand, resetKanbanCommands, type KanbanFixtureStep } from "./kanban-process.test-support";
+vi.mock("node:child_process", async (importOriginal) => {
+ const actual = await importOriginal<typeof import("node:child_process")>();
+ const fixtures = await import("./kanban-process.test-support");
+ return { ...actual, spawn: fixtures.withKanbanCommandFixtures(actual.spawn) };
+});
+
 const tempDirs: string[] = [];
 const originalPath = process.env.PATH;
 
@@ -28,7 +35,14 @@ function writeExecutableScript(
 	dir: string,
 	name: string,
 	content: string,
+ windowsProgram?: KanbanFixtureStep[],
 ): void {
+ if (process.platform === "win32" && windowsProgram) {
+  const command = name + ".cmd";
+  writeFileSync(join(dir, command), "synthetic registered command");
+  registerKanbanCommand(command, dir, windowsProgram);
+  return;
+ }
 	const filePath = join(dir, name);
 	writeFileSync(filePath, content, "utf8");
 	chmodSync(filePath, 0o755);
@@ -36,6 +50,7 @@ function writeExecutableScript(
 
 describe("kanban command helpers", () => {
 	afterEach(() => {
+  resetKanbanCommands();
 		if (originalPath === undefined) {
 			delete process.env.PATH;
 		} else {
@@ -144,7 +159,7 @@ describe("kanban command helpers", () => {
 
 	it("returns the kanban process exit code", async () => {
 		const dir = createTempDir();
-		writeExecutableScript(dir, "kanban", "#!/bin/sh\nexit 7\n");
+		writeExecutableScript(dir, "kanban", "#!/bin/sh\nexit 7\n", [{ kind: "close", code: 7 }]);
 		process.env.PATH = dir;
 
 		await expect(launchKanban()).resolves.toBe(7);
@@ -163,6 +178,9 @@ EOF
 /bin/chmod +x "${dir}/kanban"
 exit 0
 `,
+ [{ kind: "write", path: join(dir, "kanban.cmd"), content: "synthetic registered command" },
+  { kind: "register", command: "kanban.cmd", steps: [{ kind: "close", code: 6 }] },
+  { kind: "close", code: 0 }],
 		);
 		process.env.PATH = dir;
 

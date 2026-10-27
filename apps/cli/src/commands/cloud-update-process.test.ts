@@ -19,7 +19,16 @@ afterEach(() => {
 });
 const guard = `
 const fs=require('node:fs');
-const block=(name)=>(...args)=>{fs.appendFileSync(process.env.QB_UPDATE_GUARD_LOG,name+'\\n');throw new Error('QB blocked '+name);};
+const traceDirectory=process.env.QB_UPDATE_TRACE_DIRECTORY;
+const trace=traceDirectory?(()=>{
+ const fd=fs.openSync(require('node:path').join(traceDirectory,process.pid+'.jsonl'),'ax');
+ process.once('exit',()=>fs.closeSync(fd));
+ return require(${JSON.stringify(resolve('src/commands/updater-guard-trace.test-support.ts'))}).createUpdaterGuardTrace(entry=>fs.writeSync(fd,JSON.stringify(entry)+'\\n'));
+})():undefined;
+const block=(name)=>{
+ const original=(...args)=>{fs.appendFileSync(process.env.QB_UPDATE_GUARD_LOG,name+'\\n');throw new Error('QB blocked '+name);};
+ return trace?trace.wrap(name,original):original;
+};
 globalThis.fetch=block('fetch');
 for(const [module,names] of Object.entries({'node:http':['request','get'],'node:https':['request','get'],'node:net':['connect','createConnection'],'node:tls':['connect'],'node:child_process':['spawn','spawnSync','exec','execSync','execFile','execFileSync','fork']})){
  const target=require(module);for(const name of names)target[name]=block(module+':'+name);
