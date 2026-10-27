@@ -2,6 +2,12 @@
 
 Updated October 27, 2026, America/Chicago. Author: Codex, gpt-6.1-sol / medium.
 
+## Closeout scope: Azure excluded
+
+The operator explicitly excluded Azure on October 27, 2026. Do not treat Azure wiki cleanup as a blocker for this closeout. The supported typed requirements client generated five canonical Markdown documents under `docs/Project`: Functional-Requirements.md, Technical-Requirements.md, Testing-Requirements.md, TR-per-FR-Mapping.md and Requirements-Matrix.md. The combined Azure/GitHub wiki endpoint and wiki ZIP are excluded from this closeout; no Azure file cleanup or exporter repair was performed.
+
+Live inventory: 20 FR, 20 TR, 76 TEST and 96 mappings; no requirement IDs or acceptance flags were changed. Server-generated document bytes are preserved exactly. UTF-8, inventory coverage and secret checks passed. The staged whitespace check reports an exporter-generated blank line at EOF in the functional and technical documents; those two warnings are retained rather than editing authoritative generated content. Product workers stay stopped and P1 remains NOT ACCEPTED.
+
 ## Operator disposition
 
 **STOPPED. Do not resume implementation, workers, reviewers, tests, or retry monitors without a new operator instruction.** The operator ordered: stop work; commit/merge/sync Legion2; sync Omarchy; then replace existing handoffs. The operator separately confirmed that the branches must be merged. Those instructions supersede all older continuation or retry instructions.
