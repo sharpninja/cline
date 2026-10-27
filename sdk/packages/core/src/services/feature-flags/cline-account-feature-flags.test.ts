@@ -22,7 +22,13 @@ vi.mock("@cline/core/services/feature-flags/posthog", () => ({
 	},
 }));
 
-import { isClineAccountFeatureEnabled } from "./cline-account-feature-flags";
+import { isClineAccountFeatureEnabled as isGenericClineAccountFeatureEnabled } from "./cline-account-feature-flags";
+import { ProviderSettingsManager } from "../storage/provider-settings-manager";
+import { withoutClineAccountSettings } from "../../../../qbrain-governance/src/cloud-policy";
+function isClineAccountFeatureEnabled(flag: FeatureFlag) {
+	return isGenericClineAccountFeatureEnabled(flag,
+		withoutClineAccountSettings(new ProviderSettingsManager()));
+}
 
 afterEach(() => {
 	vi.unstubAllEnvs();

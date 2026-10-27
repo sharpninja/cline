@@ -45,9 +45,16 @@ vi.mock("../../services/storage/provider-settings-manager", () => ({
 }));
 
 import {
-	createComposioToolsExtension,
+	createComposioToolsExtension as createGenericComposioToolsExtension,
 	resolveComposioToolsStatePath,
 } from "./composio-tools-extension";
+import { ProviderSettingsManager } from "../../services/storage/provider-settings-manager";
+import { withoutClineAccountSettings } from "../../../../qbrain-governance/src/cloud-policy";
+function createComposioToolsExtension() {
+	return createGenericComposioToolsExtension({
+		providerSettingsManager: withoutClineAccountSettings(new ProviderSettingsManager()),
+	});
+}
 
 type RegisteredTool = {
 	name: string;
