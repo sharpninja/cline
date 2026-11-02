@@ -28,6 +28,18 @@ export interface TrustedPluginBootstrapOptions {
  * Authorize the exact workspace and reviewed archive with canonical plugin-core,
  * then install/import those captured bytes. This does not approve candidate pins
  * or supply the A8/S6 lifecycle, verification policy, REPL layout or final gates.
+ * @param options - Host-owned workspace, reviewed archive pin, private install root
+ * and authenticated transport. Model arguments cannot choose these authorities.
+ * @returns The verified private host factory and immutable authorized metadata.
+ * @throws {Error} If exact identity, archive, trust, installation or import fails.
+ * @remarks
+ * Change log:
+ * - 2026-11-02 | FR-QB-001, FR-QB-002; TR-QB-PLUGIN-001, TR-QB-TRUST-001;
+ *   TEST-QB-003, TEST-QB-004;
+ *   AC-QB-BLOCKS-EXECUTION-WHEN-REQUIRED-PLUGIN-IS-UNUSABLE,
+ *   AC-QB-FAILS-CLOSED-ON-WORKSPACE-TRUST-FAILURE | Require the real exact
+ *   @qbrainai/qbrain-ai-cline-v2-plugin identity without legacy authorization
+ *   aliases. Preserve signed version/digest, archive and reauthorization checks.
  */
 export async function bootstrapGovernedPlugin(
 	options: TrustedPluginBootstrapOptions,
@@ -54,7 +66,7 @@ export async function bootstrapGovernedPlugin(
 		});
 		if (
 			binding.agentName !== "ClineQb" ||
-			binding.pluginName !== "@sharpninja/mcpserver-cline-v2-plugin"
+			binding.pluginName !== "@qbrainai/qbrain-ai-cline-v2-plugin"
 		)
 			throw failure();
 		const artifact = verifyPinnedPluginArtifact({
