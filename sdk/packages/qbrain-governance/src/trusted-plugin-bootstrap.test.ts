@@ -124,13 +124,26 @@ function signedMarker(
 	writeFileSync(join(root, "AGENTS-README-FIRST.yaml"), JSON.stringify(marker));
 }
 
+/**
+ * Build an isolated archive and signed synthetic marker for existing trust tests.
+ * @param pluginComment - Synthetic bytes used only to vary the reviewed artifact digest.
+ * @returns Task-owned root, binding, archive options and captured health transport.
+ * @remarks
+ * Change log:
+ * - 2026-11-02 | FR-QB-001, FR-QB-002; TR-QB-PLUGIN-001, TR-QB-TRUST-001;
+ *   TEST-QB-003, TEST-QB-004;
+ *   AC-QB-BLOCKS-EXECUTION-WHEN-REQUIRED-PLUGIN-IS-UNUSABLE,
+ *   AC-QB-FAILS-CLOSED-ON-WORKSPACE-TRUST-FAILURE | Align positive fixture name
+ *   with the real exact package. Preserve all original trust/race/effect assertions;
+ *   the frozen identity cases retain legacy-name refusal as an explicit input.
+ */
 function fixture(pluginComment = "") {
 	const root = mkdtempSync(join(tmpdir(), "qb-trust-"));
 	roots.push(root);
 	const parent = join(root, "private");
 	mkdirSync(parent);
 	const manifest = {
-		name: "@sharpninja/mcpserver-cline-v2-plugin",
+		name: "@qbrainai/qbrain-ai-cline-v2-plugin",
 		version: "1.118.0",
 		type: "module",
 		main: "dist/index.js",
